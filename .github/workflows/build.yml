@@ -11,7 +11,7 @@ on:
       source_tag:
         description: 組むタグ (この fork のもの)
         required: true
-        default: n9.0.1-damuko-9b0578816c-slices256
+        default: n9.0.1-damuko-9b0578816c-oapvfix-slices256
       prerelease:
         description: プレリリースにする (比較用の組など)
         type: boolean

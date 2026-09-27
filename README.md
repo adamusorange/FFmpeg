@@ -3,16 +3,18 @@
 [DamukoPla](https://github.com/adamusorange/DamukoPla) が同梱する FFmpeg のソースとビルドの置き場所。
 上流は https://github.com/FFmpeg/FFmpeg 。
 
-This is a fork of FFmpeg used by DamukoPla. The only change is `MAX_SLICES` raised to 256 for the
-H.264 hwaccels. Binaries are LGPL-2.1+ builds; their exact sources are the tags listed below.
+This is a fork of FFmpeg used by DamukoPla. The only functional change is `MAX_SLICES` raised to 256
+for the H.264 hwaccels. Binaries are LGPL-2.1+ builds; their exact sources are the tags listed below.
 
 ## 上流からの変更
 
 | タグ | 内容 |
 |---|---|
-| `n9.0.1-damuko-9b0578816c` | 上流の `9b0578816c` (release/9.0) そのまま。比較用 |
-| `n9.0.1-damuko-9b0578816c-slices256` | 上に `libavcodec/h264dec.h` の `MAX_SLICES` を 32 から 256 にする 1 行を足したもの |
+| `n9.0.1-damuko-9b0578816c-oapvfix` | 上流の `9b0578816c` (release/9.0) に、上流の `a7502e5ff3` (openapv 1.1 で組めるようにする直し) を載せたもの。比較用 |
+| `n9.0.1-damuko-9b0578816c-oapvfix-slices256` | 上に `libavcodec/h264dec.h` の `MAX_SLICES` を 32 から 256 にする 1 行を足したもの |
 
+- `a7502e5ff3` は上流の release/9.0 にあるコミットの cherry-pick。ビルド用イメージの openapv が 1.1 に上がり、
+  `9b0578816c` のままでは `liboapvenc.c` が組めないため
 - `MAX_SLICES` は D3D11VA / DXVA2 / D3D12VA の H.264 が 1 枚の絵で受け取るスライスの上限。
   超えた分は警告なしに捨てられ、絵の下側が欠ける
   ([DamukoPla#77](https://github.com/adamusorange/DamukoPla/issues/77))
