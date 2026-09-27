@@ -1,0 +1,62 @@
+# BtbN/FFmpeg-Builds のビルド用イメージを、この fork の ghcr へ写す。
+#
+# BtbN のイメージには安定版のタグが無く、作り直されると古いものは消える。
+# 写したものを digest で固定して使う (build.yml の BUILD_IMAGE)。
+name: Copy build image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 写す元のイメージ
+        required: true
+        default: ghcr.io/btbn/ffmpeg-builds/win64-lgpl-shared-9.0:latest
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  copy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Copy image
+        env:
+          SOURCE: ${{ inputs.source }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY,,}"
+          name="${SOURCE##*/}"
+          name="${name%%[:@]*}"
+          stamp="$(date -u +%Y%m%d-%H%M%S)"
+          dest="ghcr.io/${repo}/${name}"
+
+          # 元の manifest を読み、その digest を固定してから写す
+          skopeo inspect --raw "docker://${SOURCE}" > source-manifest.json
+          source_digest="$(skopeo manifest-digest source-manifest.json)"
+          source_repo="${SOURCE%%[:@]*}"
+          skopeo copy --all --preserve-digests \
+            --dest-creds "${REGISTRY_USER}:${REGISTRY_TOKEN}" \
+            "docker://${source_repo}@${source_digest}" "docker://${dest}:${stamp}"
+
+          skopeo inspect --raw --creds "${REGISTRY_USER}:${REGISTRY_TOKEN}" \
+            "docker://${dest}:${stamp}" > dest-manifest.json
+          dest_digest="$(skopeo manifest-digest dest-manifest.json)"
+          if [[ "$source_digest" != "$dest_digest" ]]; then
+            echo "::error::digest が変わりました: ${source_digest} -> ${dest_digest}"
+            exit 1
+          fi
+
+          {
+            echo "## 写したイメージ"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| 元 | \`${SOURCE}\` |"
+            echo "| 元の digest | \`${source_digest}\` |"
+            echo "| 写した先 | \`${dest}:${stamp}\` |"
+            echo "| build.yml に書く値 | \`${dest}@${dest_digest}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "BUILD_IMAGE=${dest}@${dest_digest}"

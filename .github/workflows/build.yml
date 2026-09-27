@@ -1,0 +1,149 @@
+# この fork のタグから、FFmpeg の Windows 向け LGPL shared を組んでリリースに上げる。
+#
+# 組み方は BtbN/FFmpeg-Builds のスクリプトをそのまま使う (改造しない)。
+# 差し替えるのは FFmpeg のソースの取得元だけ (FFMPEG_REPO_OVERRIDE / GIT_BRANCH_OVERRIDE)。
+# ビルド用イメージは copy-image.yml で写したものを digest で固定する。
+name: Build FFmpeg
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: 組むタグ (この fork のもの)
+        required: true
+        default: n9.0.1-damuko-9b0578816c-slices256
+      prerelease:
+        description: プレリリースにする (比較用の組など)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: read
+
+env:
+  BTBN_REPOSITORY: https://github.com/BtbN/FFmpeg-Builds.git
+  BTBN_COMMIT: 54e192626545d0234b2a1383a34a29169cf52877
+  # copy-image.yml の出力。写す元は BUILD_IMAGE_SOURCE
+  BUILD_IMAGE: ""
+  BUILD_IMAGE_SOURCE: ""
+  TARGET: win64
+  VARIANT: lgpl-shared
+  ADDIN: "9.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve source
+        id: source
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUILD_IMAGE" != *@sha256:* ]]; then
+            echo "::error::BUILD_IMAGE を digest で指定してください"
+            exit 1
+          fi
+          refs="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${SOURCE_TAG}" "refs/tags/${SOURCE_TAG}^{}")"
+          # 注釈付きのタグなら ^{} がコミットを指す
+          commit="$(awk -v t="refs/tags/${SOURCE_TAG}^{}" '$2 == t { print $1 }' <<< "$refs")"
+          [[ -n "$commit" ]] || commit="$(awk -v t="refs/tags/${SOURCE_TAG}" '$2 == t { print $1 }' <<< "$refs")"
+          if [[ -z "$commit" ]]; then
+            echo "::error::タグがありません: ${SOURCE_TAG}"
+            exit 1
+          fi
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch BtbN/FFmpeg-Builds
+        run: |
+          set -euo pipefail
+          git init -q btbn
+          git -C btbn fetch -q --depth 1 "$BTBN_REPOSITORY" "$BTBN_COMMIT"
+          git -C btbn checkout -q --detach FETCH_HEAD
+          test "$(git -C btbn rev-parse HEAD)" = "$BTBN_COMMIT"
+
+      - name: Free disk space
+        working-directory: btbn
+        run: ./util/free_disk_space.sh
+
+      - name: Pull build image
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          docker pull "$BUILD_IMAGE"
+          # build.sh が引く名前を付ける。手元にあるので build.sh は取りに行かない
+          docker tag "$BUILD_IMAGE" "ghcr.io/${GITHUB_REPOSITORY,,}/${TARGET}-${VARIANT}-${ADDIN}:latest"
+
+      - name: Build
+        id: build
+        working-directory: btbn
+        env:
+          FFMPEG_REPO_OVERRIDE: https://github.com/${{ github.repository }}.git
+          GIT_BRANCH_OVERRIDE: ${{ inputs.source_tag }}
+        run: ./build.sh "$TARGET" "$VARIANT" "$ADDIN"
+
+      - name: Describe build
+        id: describe
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          BUILD_NAME: ${{ steps.build.outputs.build_name }}
+        run: |
+          set -euo pipefail
+          zip="btbn/artifacts/${BUILD_NAME}.zip"
+          test -f "$zip"
+          sha256="$(sha256sum "$zip" | cut -d' ' -f1)"
+          jq -n \
+            --arg source_repository "https://github.com/${GITHUB_REPOSITORY}" \
+            --arg source_tag "$SOURCE_TAG" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg btbn_repository "$BTBN_REPOSITORY" \
+            --arg btbn_commit "$BTBN_COMMIT" \
+            --arg build_image "$BUILD_IMAGE" \
+            --arg build_image_source "$BUILD_IMAGE_SOURCE" \
+            --arg target "$TARGET" \
+            --arg variant "$VARIANT" \
+            --arg addin "$ADDIN" \
+            --arg workflow_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg archive_name "${BUILD_NAME}.zip" \
+            --arg archive_sha256 "$sha256" \
+            '$ARGS.named' > "btbn/artifacts/${BUILD_NAME}.json"
+          cat "btbn/artifacts/${BUILD_NAME}.json"
+
+          {
+            echo "FFmpeg の Windows 向け LGPL-2.1+ shared ビルド (${TARGET}-${VARIANT}-${ADDIN})。"
+            echo
+            echo "- ソース: [\`${SOURCE_TAG}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${SOURCE_COMMIT}) (\`${SOURCE_COMMIT}\`)"
+            echo "- 組み方: [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/tree/${BTBN_COMMIT}) のスクリプトをそのまま使用"
+            echo "- ビルド用イメージ: \`${BUILD_IMAGE}\` (元は \`${BUILD_IMAGE_SOURCE}\`)"
+            echo "- ワークフロー: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "上流の FFmpeg からの変更点は、ソースのタグと上流の差分で確かめられます。"
+            echo "同梱の \`.json\` に、ソース・スクリプト・イメージと zip の SHA-256 を記録しています。"
+          } > btbn/artifacts/notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          BUILD_NAME: ${{ steps.build.outputs.build_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            flags=()
+            if [[ "$PRERELEASE" == "true" ]]; then
+              flags+=(--prerelease --latest=false)
+            fi
+            gh release create "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$SOURCE_TAG" --notes-file btbn/artifacts/notes.md "${flags[@]}"
+          fi
+          # 同じ名前の資産は上書きしない。取り込み側は SHA-256 で固定している
+          gh release upload "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            "btbn/artifacts/${BUILD_NAME}.zip" "btbn/artifacts/${BUILD_NAME}.json"
