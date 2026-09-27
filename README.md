@@ -31,6 +31,17 @@ GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) �
    スクリプトは改造せず、ソースの取得元だけを `FFMPEG_REPO_OVERRIDE` / `GIT_BRANCH_OVERRIDE` で差し替える
 
 リリースには zip と、ソースのコミット・スクリプトのコミット・イメージの digest・zip の SHA-256 を書いた `.json` を置く。
+リリースのタグはソースのタグと同じ。同じタグを組み直しても、既にある資産は上書きしない。
+
+## FFmpeg を更新するとき
+
+1. 上流の新しいコミットから枝を切り、`damuko/release-9.0` の変更を載せ直す (上流に入った直しは外す)
+2. タグを打つ。名前は `n<版>-damuko-<上流のコミット>[-<変更>]` とし、`n<版>-` で始める
+   (FFmpeg は `git describe` で版の表示を決め、DamukoPla の取り込みは版の表示がタグで始まることを確かめる)
+3. ビルド用イメージを新しくするなら `Copy build image` を回し、`build.yml` の `BUILD_IMAGE` を書き換える。
+   BtbN のスクリプトのコミット (`BTBN_COMMIT`) も、そのイメージを作ったものに合わせる
+4. `Build FFmpeg` をタグを指定して回す。比較用の組は `prerelease` を立てる
+5. DamukoPla 側で `modules\player\scripts\fetch-ffmpeg.ps1` を回して取り込む
 
 ## ライセンス
 
