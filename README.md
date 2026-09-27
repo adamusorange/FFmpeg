@@ -23,15 +23,32 @@ for the H.264 hwaccels. Binaries are LGPL-2.1+ builds; their exact sources are t
 
 ## ビルド
 
-GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) にはワークフローだけを置く。
+GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) にはワークフローと、構成のファイルだけを置く。
 
 1. `Copy build image` (`copy-image.yml`): BtbN/FFmpeg-Builds のビルド用イメージを、この fork の ghcr へ写す。
    出た digest を `build.yml` の `BUILD_IMAGE` に書く
 2. `Build FFmpeg` (`build.yml`): 入力のタグを、BtbN/FFmpeg-Builds のスクリプト (コミットで固定) で組む。
-   スクリプトは改造せず、ソースの取得元だけを `FFMPEG_REPO_OVERRIDE` / `GIT_BRANCH_OVERRIDE` で差し替える
+   スクリプトは改造せず、ソースの取得元を `FFMPEG_REPO_OVERRIDE` / `GIT_BRANCH_OVERRIDE` で差し替える。
+   構成 (`config`) を選ぶ
 
-リリースには zip と、ソースのコミット・スクリプトのコミット・イメージの digest・zip の SHA-256 を書いた `.json` を置く。
-リリースのタグはソースのタグと同じ。同じタグを組み直しても、既にある資産は上書きしない。
+| 構成 | 中身 | 資産名 | DamukoPla での使い道 |
+|---|---|---|---|
+| `slim` | DamukoPla が使う部品だけ (`slim/configure.txt`) | `ffmpeg-<版>-win64-lgpl-shared-9.0-slim.zip` | 同梱する |
+| `full` | BtbN の `win64-lgpl-shared` の構成のまま | `ffmpeg-<版>-win64-lgpl-shared-9.0.zip` | 見本を作る道具 (同梱しない) |
+
+`slim` は、写したイメージから `slim/Dockerfile` で派生イメージを作って組む。
+
+- BtbN が組んだ依存を消し、`slim/sources.txt` の依存 (dav1d・soxr・zlib) を正式リリースの tarball
+  (SHA-256 で固定) から組み直す。組み方は `slim/stages/`。soxr は OpenMP なし
+- 環境変数 `FF_CONFIGURE` を `slim/configure.txt` に差し替える (BtbN の `build.sh` はコンテナの中でこれを展開する)。
+  `--fatal-warnings` で、要求した部品が外れたら configure で止める
+- 組んだあと `slim/check-configure.sh` で、configure の要約 (外部ライブラリ・hwaccel・プロトコル・スレッドなど) を確かめる
+- コンパイラと mingw-w64 はイメージのもの
+
+リリースには zip と、構成・ソースのコミット・スクリプトのコミット・イメージの digest・
+configure の引数・依存の版と SHA-256・zip の SHA-256 を書いた `.json` を置く。
+リリースのタグはソースのタグと同じで、`slim` と `full` を同じリリースに並べる。
+同じタグを組み直しても、既にある資産は上書きしない。
 
 ## FFmpeg を更新するとき
 
@@ -40,10 +57,12 @@ GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) �
    (FFmpeg は `git describe` で版の表示を決め、DamukoPla の取り込みは版の表示がタグで始まることを確かめる)
 3. ビルド用イメージを新しくするなら `Copy build image` を回し、`build.yml` の `BUILD_IMAGE` を書き換える。
    BtbN のスクリプトのコミット (`BTBN_COMMIT`) も、そのイメージを作ったものに合わせる
-4. `Build FFmpeg` をタグを指定して回す。比較用の組は `prerelease` を立てる
+4. `Build FFmpeg` をタグを指定して、`slim` と `full` の 2 回回す。比較用の組は `prerelease` を立てる。
+   `slim/sources.txt` の依存も、新しいリリースがあれば版と SHA-256 を書き換える
 5. DamukoPla 側で `modules\player\scripts\fetch-ffmpeg.ps1` を回して取り込む
 
 ## ライセンス
 
 FFmpeg のソースは上流と同じく LGPL-2.1+ (一部 GPL)。リリースのビルドは LGPL 構成
 (`--enable-gpl` / `--enable-nonfree` なし)。ワークフローのファイルも同じ条件で扱ってよい。
+`slim` が静的に取り込む依存は dav1d (BSD-2-Clause)・soxr (LGPL-2.1+)・zlib (Zlib)。

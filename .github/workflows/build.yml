@@ -1,8 +1,14 @@
 # この fork のタグから、FFmpeg の Windows 向け LGPL shared を組んでリリースに上げる。
 #
 # 組み方は BtbN/FFmpeg-Builds のスクリプトをそのまま使う (改造しない)。
-# 差し替えるのは FFmpeg のソースの取得元だけ (FFMPEG_REPO_OVERRIDE / GIT_BRANCH_OVERRIDE)。
+# 差し替えるのは FFmpeg のソースの取得元 (FFMPEG_REPO_OVERRIDE / GIT_BRANCH_OVERRIDE) と、
+# 構成が slim のときのビルド用イメージ (slim/ の Dockerfile で派生させたもの)。
 # ビルド用イメージは copy-image.yml で写したものを digest で固定する。
+#
+# 構成:
+#   full  BtbN の win64-lgpl-shared の構成のまま。DamukoPla では見本を作る道具として使う
+#   slim  DamukoPla が使う部品だけに絞った構成 (slim/configure.txt)。DamukoPla が同梱する
+# 同じタグのリリースに両方を並べる。slim の資産名には -slim を付ける (BtbN の出力名が同じになるため)。
 name: Build FFmpeg
 
 on:
@@ -12,10 +18,22 @@ on:
         description: 組むタグ (この fork のもの)
         required: true
         default: n9.0.1-damuko-9b0578816c-oapvfix-slices256
+      config:
+        description: 構成 (slim は同梱用、full は見本を作る道具用)
+        type: choice
+        options:
+          - slim
+          - full
+        default: slim
       prerelease:
         description: プレリリースにする (比較用の組など)
         type: boolean
         default: false
+
+# 同じタグのリリースを 2 つの構成が同時に作らないようにする
+concurrency:
+  group: release-${{ inputs.source_tag }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -30,10 +48,14 @@ env:
   TARGET: win64
   VARIANT: lgpl-shared
   ADDIN: "9.0"
+  CONFIG: ${{ inputs.config }}
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Resolve source
         id: source
@@ -43,6 +65,10 @@ jobs:
           set -euo pipefail
           if [[ "$BUILD_IMAGE" != *@sha256:* ]]; then
             echo "::error::BUILD_IMAGE を digest で指定してください"
+            exit 1
+          fi
+          if [[ "$CONFIG" != full && "$CONFIG" != slim ]]; then
+            echo "::error::構成は full か slim です: ${CONFIG}"
             exit 1
           fi
           refs="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
@@ -55,6 +81,14 @@ jobs:
             exit 1
           fi
           echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      # slim/ の Dockerfile と構成を読むため、このワークフローのコミットを取る
+      - name: Fetch workflow files
+        run: |
+          set -euo pipefail
+          git init -q workflow
+          git -C workflow fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git -C workflow checkout -q --detach FETCH_HEAD
 
       - name: Fetch BtbN/FFmpeg-Builds
         run: |
@@ -76,8 +110,35 @@ jobs:
           set -euo pipefail
           echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
           docker pull "$BUILD_IMAGE"
-          # build.sh が引く名前を付ける。手元にあるので build.sh は取りに行かない
-          docker tag "$BUILD_IMAGE" "ghcr.io/${GITHUB_REPOSITORY,,}/${TARGET}-${VARIANT}-${ADDIN}:latest"
+
+      # slim の依存の tarball を取り、SHA-256 を確かめてから派生イメージに渡す
+      - name: Fetch slim dependencies
+        if: inputs.config == 'slim'
+        working-directory: workflow/slim
+        run: |
+          set -euo pipefail
+          mkdir -p sources
+          while read -r name version license url sha256; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            curl -fsSL --retry 3 -o "sources/${name}.tar.xz" "$url" < /dev/null
+            echo "${sha256}  sources/${name}.tar.xz" | sha256sum -c -
+          done < sources.txt
+
+      - name: Prepare build image
+        run: |
+          set -euo pipefail
+          # build.sh が使う名前。手元にあるので build.sh は取りに行かない
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/${TARGET}-${VARIANT}-${ADDIN}:latest"
+          if [[ "$CONFIG" == slim ]]; then
+            ff_configure="$(sed 's/#.*//' workflow/slim/configure.txt | xargs)"
+            docker build --pull=false \
+              --build-arg BASE_IMAGE="$BUILD_IMAGE" \
+              --build-arg FF_CONFIGURE="$ff_configure" \
+              -t "$image" workflow/slim
+          else
+            docker tag "$BUILD_IMAGE" "$image"
+          fi
+          docker image inspect "$image" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^FF_'
 
       - name: Build
         id: build
@@ -85,7 +146,13 @@ jobs:
         env:
           FFMPEG_REPO_OVERRIDE: https://github.com/${{ github.repository }}.git
           GIT_BRANCH_OVERRIDE: ${{ inputs.source_tag }}
-        run: ./build.sh "$TARGET" "$VARIANT" "$ADDIN"
+        run: |
+          set -euo pipefail
+          ./build.sh "$TARGET" "$VARIANT" "$ADDIN" 2>&1 | tee "${GITHUB_WORKSPACE}/build.log"
+
+      - name: Check configure
+        if: inputs.config == 'slim'
+        run: bash workflow/slim/check-configure.sh build.log
 
       - name: Describe build
         id: describe
@@ -95,13 +162,35 @@ jobs:
           BUILD_NAME: ${{ steps.build.outputs.build_name }}
         run: |
           set -euo pipefail
-          zip="btbn/artifacts/${BUILD_NAME}.zip"
+          test -n "$BUILD_NAME"
+          asset="$BUILD_NAME"
+          [[ "$CONFIG" == full ]] || asset="${BUILD_NAME}-${CONFIG}"
+          zip="btbn/artifacts/${asset}.zip"
+          if [[ "$asset" != "$BUILD_NAME" ]]; then
+            mv "btbn/artifacts/${BUILD_NAME}.zip" "$zip"
+          fi
           test -f "$zip"
           sha256="$(sha256sum "$zip" | cut -d' ' -f1)"
+
+          # build.sh がコンテナの中で実際に渡した configure の引数 (set -x の出力)
+          configure_command="$(grep -m1 '^+ ./configure ' build.log | sed 's/^+ //')"
+          test -n "$configure_command"
+
+          if [[ "$CONFIG" == slim ]]; then
+            dependencies="$(jq -Rn '[inputs | select(test("^\\s*(#|$)") | not) | [splits("\\s+")]
+              | { name: .[0], version: .[1], license: .[2], url: .[3], sha256: .[4] }]' \
+              < workflow/slim/sources.txt)"
+          else
+            # BtbN のイメージの依存。版は btbn_commit のスクリプトにある
+            dependencies=null
+          fi
+
           jq -n \
+            --arg config "$CONFIG" \
             --arg source_repository "https://github.com/${GITHUB_REPOSITORY}" \
             --arg source_tag "$SOURCE_TAG" \
             --arg source_commit "$SOURCE_COMMIT" \
+            --arg workflow_commit "$GITHUB_SHA" \
             --arg btbn_repository "$BTBN_REPOSITORY" \
             --arg btbn_commit "$BTBN_COMMIT" \
             --arg build_image "$BUILD_IMAGE" \
@@ -109,23 +198,32 @@ jobs:
             --arg target "$TARGET" \
             --arg variant "$VARIANT" \
             --arg addin "$ADDIN" \
+            --arg configure_command "$configure_command" \
+            --argjson dependencies "$dependencies" \
             --arg workflow_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg archive_name "${BUILD_NAME}.zip" \
+            --arg archive_name "${asset}.zip" \
             --arg archive_sha256 "$sha256" \
-            '$ARGS.named' > "btbn/artifacts/${BUILD_NAME}.json"
-          cat "btbn/artifacts/${BUILD_NAME}.json"
+            '$ARGS.named' > "btbn/artifacts/${asset}.json"
+          cat "btbn/artifacts/${asset}.json"
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
 
           {
-            echo "FFmpeg の Windows 向け LGPL-2.1+ shared ビルド (${TARGET}-${VARIANT}-${ADDIN})。"
+            echo "FFmpeg の Windows 向け LGPL shared ビルド (${TARGET}-${VARIANT}-${ADDIN})。"
             echo
             echo "- ソース: [\`${SOURCE_TAG}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${SOURCE_COMMIT}) (\`${SOURCE_COMMIT}\`)"
             echo "- 組み方: [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/tree/${BTBN_COMMIT}) のスクリプトをそのまま使用"
             echo "- ビルド用イメージ: \`${BUILD_IMAGE}\` (元は \`${BUILD_IMAGE_SOURCE}\`)"
-            echo "- ワークフロー: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "構成は 2 つあり、資産名で見分けます。"
+            echo
+            echo "- \`...-${ADDIN}.zip\` (full): BtbN の構成のまま"
+            echo "- \`...-${ADDIN}-slim.zip\` (slim): DamukoPla が使う部品だけに絞った構成。"
+            echo "  依存 (dav1d・soxr・zlib) を正式リリースから組み直したイメージで組む。"
+            echo "  構成と依存はこの fork の \`damukopla\` 枝の \`slim/\` にある"
             echo
             echo "上流の FFmpeg からの変更点は、ソースのタグと上流の差分で確かめられます。"
-            echo "同梱の \`.json\` に、ソース・スクリプト・イメージと zip の SHA-256 を記録しています。"
+            echo "資産ごとの \`.json\` に、ソース・スクリプト・イメージ・configure の引数・依存と zip の SHA-256 を記録しています。"
           } > btbn/artifacts/notes.md
 
       - name: Publish release
@@ -133,10 +231,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TAG: ${{ inputs.source_tag }}
           PRERELEASE: ${{ inputs.prerelease }}
-          BUILD_NAME: ${{ steps.build.outputs.build_name }}
+          ASSET: ${{ steps.describe.outputs.asset }}
         run: |
           set -euo pipefail
-          if ! gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          if gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file btbn/artifacts/notes.md
+          else
             flags=()
             if [[ "$PRERELEASE" == "true" ]]; then
               flags+=(--prerelease --latest=false)
@@ -146,4 +246,4 @@ jobs:
           fi
           # 同じ名前の資産は上書きしない。取り込み側は SHA-256 で固定している
           gh release upload "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
-            "btbn/artifacts/${BUILD_NAME}.zip" "btbn/artifacts/${BUILD_NAME}.json"
+            "btbn/artifacts/${ASSET}.zip" "btbn/artifacts/${ASSET}.json"

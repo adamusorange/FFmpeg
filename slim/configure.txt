@@ -1,0 +1,26 @@
+# slim の構成の configure の引数 (FF_CONFIGURE)。1 行に 1 つ以上、# から行末は読まない。
+# 値に引用符は書かない (build.sh はコンテナの中で FF_CONFIGURE をそのまま展開する)。
+# 対象は DamukoPla が使う部品 (DamukoPla#126)。
+
+# ライセンスと出力の形は、いまの BtbN の lgpl-shared と同じ
+--enable-version3 --disable-debug --enable-shared --disable-static
+# configure の警告 (did not match anything、Disabled ... because) で止める
+--fatal-warnings
+
+# 自動で見つけたものは入れない。要るものは下で明示する
+--disable-autodetect
+--enable-w32threads
+--enable-d3d11va
+--enable-zlib --enable-libdav1d --enable-libsoxr
+
+--disable-avdevice --disable-devices --disable-network
+
+# 単体テストが見本を作るのに使う
+--disable-encoders --enable-encoder=mpeg4
+--disable-muxers --enable-muxer=mp4
+--disable-protocols --enable-protocol=file
+
+# abuffer / abuffersink は常に入り、ここでは選べない
+--disable-filters --enable-filter=atempo,dynaudnorm,aresample
+
+--disable-hwaccels --enable-hwaccel=*_d3d11va,*_d3d11va2
