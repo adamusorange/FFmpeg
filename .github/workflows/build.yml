@@ -9,6 +9,9 @@
 #   full  BtbN の win64-lgpl-shared の構成のまま。DamukoPla では見本を作る道具として使う
 #   slim  DamukoPla が使う部品だけに絞った構成 (slim/configure.txt)。DamukoPla が同梱する
 # 同じタグのリリースに両方を並べる。slim の資産名には -slim を付ける (BtbN の出力名が同じになるため)。
+#
+# 試しの組 (部品を外したときの大きさ、LTO など) は extra_configure で slim の configure に引数を足し、
+# publish を外してリリースに上げずに Actions の成果物として残す。
 name: Build FFmpeg
 
 on:
@@ -29,10 +32,18 @@ on:
         description: プレリリースにする (比較用の組など)
         type: boolean
         default: false
+      extra_configure:
+        description: slim の configure に足す引数 (試しの組。例 --disable-encoder=mpeg4)
+        required: false
+        default: ""
+      publish:
+        description: リリースに上げる (外すと Actions の成果物として残す)
+        type: boolean
+        default: true
 
-# 同じタグのリリースを 2 つの構成が同時に作らないようにする
+# 同じタグのリリースを 2 つの構成が同時に作らないようにする。リリースに上げない試しの組は並べて回せる
 concurrency:
-  group: release-${{ inputs.source_tag }}
+  group: release-${{ inputs.source_tag }}${{ !inputs.publish && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -49,6 +60,8 @@ env:
   VARIANT: lgpl-shared
   ADDIN: "9.0"
   CONFIG: ${{ inputs.config }}
+  EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
+  PUBLISH: ${{ inputs.publish }}
 
 jobs:
   build:
@@ -69,6 +82,15 @@ jobs:
           fi
           if [[ "$CONFIG" != full && "$CONFIG" != slim ]]; then
             echo "::error::構成は full か slim です: ${CONFIG}"
+            exit 1
+          fi
+          if [[ -n "$EXTRA_CONFIGURE" && "$CONFIG" != slim ]]; then
+            echo "::error::extra_configure は slim でだけ使えます"
+            exit 1
+          fi
+          # 足した引数で組んだものを、正式な資産と取り違えないようにする
+          if [[ -n "$EXTRA_CONFIGURE" && "$PUBLISH" == true ]]; then
+            echo "::error::extra_configure を使うときは publish を外してください"
             exit 1
           fi
           refs="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
@@ -131,6 +153,8 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}/${TARGET}-${VARIANT}-${ADDIN}:latest"
           if [[ "$CONFIG" == slim ]]; then
             ff_configure="$(sed 's/#.*//' workflow/slim/configure.txt | xargs)"
+            # 後に書いた引数が勝つので、足す引数は末尾に置く
+            [[ -z "$EXTRA_CONFIGURE" ]] || ff_configure="${ff_configure} ${EXTRA_CONFIGURE}"
             docker build --pull=false \
               --build-arg BASE_IMAGE="$BUILD_IMAGE" \
               --build-arg FF_CONFIGURE="$ff_configure" \
@@ -150,8 +174,10 @@ jobs:
           set -euo pipefail
           ./build.sh "$TARGET" "$VARIANT" "$ADDIN" 2>&1 | tee "${GITHUB_WORKSPACE}/build.log"
 
+      # 試しの組は、決めた構成から外れるのが目的なので、結果を残すだけで止めない
       - name: Check configure
         if: inputs.config == 'slim'
+        continue-on-error: ${{ inputs.extra_configure != '' }}
         run: bash workflow/slim/check-configure.sh build.log
 
       - name: Describe build
@@ -227,6 +253,7 @@ jobs:
           } > btbn/artifacts/notes.md
 
       - name: Publish release
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TAG: ${{ inputs.source_tag }}
@@ -247,3 +274,14 @@ jobs:
           # 同じ名前の資産は上書きしない。取り込み側は SHA-256 で固定している
           gh release upload "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
             "btbn/artifacts/${ASSET}.zip" "btbn/artifacts/${ASSET}.json"
+
+      - name: Upload artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.describe.outputs.asset }}
+          path: |
+            btbn/artifacts/${{ steps.describe.outputs.asset }}.zip
+            btbn/artifacts/${{ steps.describe.outputs.asset }}.json
+            build.log
+          if-no-files-found: error
