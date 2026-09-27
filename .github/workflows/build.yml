@@ -24,9 +24,9 @@ permissions:
 env:
   BTBN_REPOSITORY: https://github.com/BtbN/FFmpeg-Builds.git
   BTBN_COMMIT: 54e192626545d0234b2a1383a34a29169cf52877
-  # copy-image.yml の出力。写す元は BUILD_IMAGE_SOURCE
-  BUILD_IMAGE: ""
-  BUILD_IMAGE_SOURCE: ""
+  # copy-image.yml で 2026-09-27 に写したもの。写す元は BUILD_IMAGE_SOURCE
+  BUILD_IMAGE: ghcr.io/adamusorange/ffmpeg/win64-lgpl-shared-9.0@sha256:9bf576f1e75f4b3b456ef71793e52a93ee2b777f51c78b5b19742a83d187e897
+  BUILD_IMAGE_SOURCE: ghcr.io/btbn/ffmpeg-builds/win64-lgpl-shared-9.0@sha256:9bf576f1e75f4b3b456ef71793e52a93ee2b777f51c78b5b19742a83d187e897
   TARGET: win64
   VARIANT: lgpl-shared
   ADDIN: "9.0"
