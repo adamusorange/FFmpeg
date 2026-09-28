@@ -52,6 +52,9 @@ configure の引数・依存の版と SHA-256・zip の SHA-256 を書いた `.j
 
 試しの組 (部品を外したときの大きさや LTO を量るもの) は、`extra_configure` で `slim` の configure に引数を足し、
 `publish` を外して回す。リリースには上げず、zip・`.json`・ビルドのログを Actions の成果物として残す。
+`extra_configure` の `--disable-<種類>=<名前>` で外す部品は、`slim/configure.txt` の `--enable-<種類>=...` から
+抜いてから渡す (残すと configure が「Disabled ... because」と警告し、`--fatal-warnings` で止まる)。
+記号を残した組 (`--disable-stripping`) を作れば、DLL の記号表から部品ごとの大きさを見積もれる。
 
 ## FFmpeg を更新するとき
 
@@ -62,6 +65,8 @@ configure の引数・依存の版と SHA-256・zip の SHA-256 を書いた `.j
    BtbN のスクリプトのコミット (`BTBN_COMMIT`) も、そのイメージを作ったものに合わせる
 4. `Build FFmpeg` をタグを指定して、`slim` と `full` の 2 回回す。比較用の組は `prerelease` を立てる。
    `slim/sources.txt` の依存も、新しいリリースがあれば版と SHA-256 を書き換える
+   依存の版を上げたら、DamukoPla の `modules\player\third_party\ffmpeg-deps-licenses` の許諾文も
+   同じ tarball から取り直す (DamukoPla の `scripts\pack.ps1` が版の食い違いで止まる)
 5. DamukoPla 側で `modules\player\scripts\fetch-ffmpeg.ps1` を回して取り込む
 
 ## ライセンス
@@ -69,3 +74,4 @@ configure の引数・依存の版と SHA-256・zip の SHA-256 を書いた `.j
 FFmpeg のソースは上流と同じく LGPL-2.1+ (一部 GPL)。リリースのビルドは LGPL 構成
 (`--enable-gpl` / `--enable-nonfree` なし)。ワークフローのファイルも同じ条件で扱ってよい。
 `slim` が静的に取り込む依存は dav1d (BSD-2-Clause)・soxr (LGPL-2.1+)・zlib (Zlib)。
+その許諾文は DamukoPla の配布物 (`runtimes\win-x64\FFMPEG-DEPS-NOTICE.txt`) に入れている。

@@ -153,6 +153,35 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}/${TARGET}-${VARIANT}-${ADDIN}:latest"
           if [[ "$CONFIG" == slim ]]; then
             ff_configure="$(sed 's/#.*//' workflow/slim/configure.txt | xargs)"
+            # configure は、--enable-<種類>=<名前> で求めた部品が後から外れると「Disabled ... because」と警告し、
+            # --fatal-warnings で止まる。足す引数で外す部品は、元の構成の --enable-<種類>=... から抜いておく
+            set -f
+            for extra in $EXTRA_CONFIGURE; do
+              [[ "$extra" =~ ^--disable-([a-z]+)=(.+)$ ]] || continue
+              kind="${BASH_REMATCH[1]}"
+              IFS=',' read -ra names <<< "${BASH_REMATCH[2]}"
+              rebuilt=()
+              for arg in $ff_configure; do
+                if [[ "$arg" != --enable-"$kind"=* ]]; then
+                  rebuilt+=("$arg")
+                  continue
+                fi
+                IFS=',' read -ra items <<< "${arg#*=}"
+                kept=()
+                for item in "${items[@]}"; do
+                  drop=
+                  for name in "${names[@]}"; do
+                    [[ "$item" == "$name" ]] && drop=1
+                  done
+                  [[ -n "$drop" ]] || kept+=("$item")
+                done
+                if (( ${#kept[@]} )); then
+                  rebuilt+=("--enable-${kind}=$(IFS=,; echo "${kept[*]}")")
+                fi
+              done
+              ff_configure="${rebuilt[*]}"
+            done
+            set +f
             # 後に書いた引数が勝つので、足す引数は末尾に置く
             [[ -z "$EXTRA_CONFIGURE" ]] || ff_configure="${ff_configure} ${EXTRA_CONFIGURE}"
             docker build --pull=false \
