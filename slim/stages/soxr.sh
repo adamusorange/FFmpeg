@@ -3,7 +3,7 @@
 # swresample は soxr にスレッドの数を渡さない (既定の 1 本) ので、OpenMP の有無で動きは変わらない。
 
 ffbuild_dockerbuild() {
-    tar xf /slim/sources/soxr.tar.xz --strip-components=1
+    tar xf /slim/sources/soxr.tar.* --strip-components=1
 
     # 古い cmake_minimum_required を、いまの CMake が受け付ける形にする
     sed -i 's/VERSION 3.1 /VERSION 3.1...3.10 /g' CMakeLists.txt

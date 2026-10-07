@@ -40,6 +40,10 @@ on:
         description: リリースに上げる (外すと Actions の成果物として残す)
         type: boolean
         default: true
+      revision:
+        description: slim の組の版。同じタグを構成を変えて組み直すとき、資産名に -r<版> を付ける (空なら付けない)
+        required: false
+        default: ""
 
 # 同じタグのリリースを 2 つの構成が同時に作らないようにする。リリースに上げない試しの組は並べて回せる
 concurrency:
@@ -62,6 +66,7 @@ env:
   CONFIG: ${{ inputs.config }}
   EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
   PUBLISH: ${{ inputs.publish }}
+  REVISION: ${{ inputs.revision }}
 
 jobs:
   build:
@@ -82,6 +87,10 @@ jobs:
           fi
           if [[ "$CONFIG" != full && "$CONFIG" != slim ]]; then
             echo "::error::構成は full か slim です: ${CONFIG}"
+            exit 1
+          fi
+          if [[ -n "$REVISION" && ( "$CONFIG" != slim || ! "$REVISION" =~ ^[0-9]+$ ) ]]; then
+            echo "::error::revision は slim でだけ使える数です: ${REVISION}"
             exit 1
           fi
           if [[ -n "$EXTRA_CONFIGURE" && "$CONFIG" != slim ]]; then
@@ -142,8 +151,13 @@ jobs:
           mkdir -p sources
           while read -r name version license url sha256; do
             [[ -z "$name" || "$name" == \#* ]] && continue
-            curl -fsSL --retry 3 -o "sources/${name}.tar.xz" "$url" < /dev/null
-            echo "${sha256}  sources/${name}.tar.xz" | sha256sum -c -
+            case "$url" in
+              *.tar.xz) ext=tar.xz ;;
+              *.tar.gz) ext=tar.gz ;;
+              *) echo "::error::tarball の形が分かりません: ${url}"; exit 1 ;;
+            esac
+            curl -fsSL --retry 3 -o "sources/${name}.${ext}" "$url" < /dev/null
+            echo "${sha256}  sources/${name}.${ext}" | sha256sum -c -
           done < sources.txt
 
       - name: Prepare build image
@@ -220,6 +234,8 @@ jobs:
           test -n "$BUILD_NAME"
           asset="$BUILD_NAME"
           [[ "$CONFIG" == full ]] || asset="${BUILD_NAME}-${CONFIG}"
+          # 同じタグを構成を変えて組み直したもの。資産は上書きしないので名前を変える
+          [[ -z "$REVISION" ]] || asset="${asset}-r${REVISION}"
           zip="btbn/artifacts/${asset}.zip"
           if [[ "$asset" != "$BUILD_NAME" ]]; then
             mv "btbn/artifacts/${BUILD_NAME}.zip" "$zip"
@@ -242,6 +258,7 @@ jobs:
 
           jq -n \
             --arg config "$CONFIG" \
+            --arg revision "$REVISION" \
             --arg source_repository "https://github.com/${GITHUB_REPOSITORY}" \
             --arg source_tag "$SOURCE_TAG" \
             --arg source_commit "$SOURCE_COMMIT" \
@@ -274,7 +291,8 @@ jobs:
             echo
             echo "- \`...-${ADDIN}.zip\` (full): BtbN の構成のまま"
             echo "- \`...-${ADDIN}-slim.zip\` (slim): DamukoPla が使う部品だけに絞った構成。"
-            echo "  依存 (dav1d・soxr・zlib) を正式リリースから組み直したイメージで組む。"
+            echo "  依存 (dav1d・soxr・zlib・nv-codec-headers・Opus・LAME) を正式リリースから組み直したイメージで組む。"
+            echo "  同じタグを構成を変えて組み直したものは \`-slim-r<版>\` で、版の大きいものが新しい"
             echo "  構成と依存はこの fork の \`damukopla\` 枝の \`slim/\` にある"
             echo
             echo "上流の FFmpeg からの変更点は、ソースのタグと上流の差分で確かめられます。"

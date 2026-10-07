@@ -2,7 +2,7 @@
 # BtbN の scripts.d/50-dav1d.sh と同じ組み方。使わない道具とテストは組まない
 
 ffbuild_dockerbuild() {
-    tar xf /slim/sources/dav1d.tar.xz --strip-components=1
+    tar xf /slim/sources/dav1d.tar.* --strip-components=1
 
     mkdir build && cd build
 

@@ -1,6 +1,6 @@
 # slim の構成の configure の引数 (FF_CONFIGURE)。1 行に 1 つ以上、# から行末は読まない。
 # 値に引用符は書かない (build.sh はコンテナの中で FF_CONFIGURE をそのまま展開する)。
-# 対象は DamukoPla が使う部品 (DamukoPla#126)。
+# 対象は DamukoPla が使う部品 (DamukoPla#126、変換は DamukoPla#147)。
 
 # ライセンスと出力の形は、いまの BtbN の lgpl-shared と同じ
 --enable-version3 --disable-debug --enable-shared --disable-static
@@ -12,15 +12,20 @@
 --enable-w32threads
 --enable-d3d11va
 --enable-zlib --enable-libdav1d --enable-libsoxr
+# 変換 (DamukoPla#147): NVENC (本体はドライバーの DLL)、Opus、MP3
+--enable-ffnvcodec --enable-nvenc
+--enable-libopus --enable-libmp3lame
 
 --disable-avdevice --disable-devices --disable-network
 
-# 単体テストが見本を作るのに使う
---disable-encoders --enable-encoder=mpeg4
---disable-muxers --enable-muxer=mp4
---disable-protocols --enable-protocol=file
+# mpeg4 と mp4 は単体テストが見本を作るのに使う。ほかは変換 (動画は NVENC、音楽は Opus・MP3・FLAC) と、その入れ物
+--disable-encoders --enable-encoder=mpeg4,h264_nvenc,hevc_nvenc,av1_nvenc,libopus,libmp3lame,flac
+--disable-muxers --enable-muxer=mp4,matroska,webm,ogg,opus,mp3,flac
+# pipe は変換の進み具合 (-progress pipe:1) を受け取るのに使う
+--disable-protocols --enable-protocol=file,pipe
 
-# abuffer / abuffersink は常に入り、ここでは選べない
---disable-filters --enable-filter=atempo,dynaudnorm,aresample
+# abuffer / abuffersink は常に入り、ここでは選べない。
+# scale・format・aformat・hwdownload・hwupload・scale_d3d11 は変換で、解像度の上限と画素の形式をそろえるのに使う
+--disable-filters --enable-filter=atempo,dynaudnorm,aresample,aformat,format,scale,scale_d3d11,hwdownload,hwupload
 
 --disable-hwaccels --enable-hwaccel=*_d3d11va,*_d3d11va2
