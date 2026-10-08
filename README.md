@@ -38,12 +38,14 @@ GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) �
 
 `slim` は、写したイメージから `slim/Dockerfile` で派生イメージを作って組む。
 
-- BtbN が組んだ依存を消し、`slim/sources.txt` の依存 (dav1d・soxr・zlib) を正式リリースの tarball
+- BtbN が組んだ依存を消し、`slim/sources.txt` の依存 (dav1d・soxr・zlib・nv-codec-headers・Opus・LAME) を正式リリースの tarball
   (SHA-256 で固定) から組み直す。組み方は `slim/stages/`。soxr は OpenMP なし
 - 環境変数 `FF_CONFIGURE` を `slim/configure.txt` に差し替える (BtbN の `build.sh` はコンテナの中でこれを展開する)。
   `--fatal-warnings` で、要求した部品が外れたら configure で止める
 - 組んだあと `slim/check-configure.sh` で、configure の要約 (外部ライブラリ・hwaccel・プロトコル・スレッドなど) を確かめる
 - コンパイラと mingw-w64 はイメージのもの
+
+同じタグを構成を変えて組み直すとき (DamukoPla#147 で変換の部品を足したときなど) は、入力の `revision` に版を入れる。`slim` の資産名に `-r<版>` が付き (`...-9.0-slim-r2.zip`)、前の資産と並ぶ。DamukoPla の取り込みは版の大きいものを選ぶ。
 
 リリースには zip と、構成・ソースのコミット・スクリプトのコミット・イメージの digest・
 configure の引数・依存の版と SHA-256・zip の SHA-256 を書いた `.json` を置く。
@@ -73,5 +75,5 @@ configure の引数・依存の版と SHA-256・zip の SHA-256 を書いた `.j
 
 FFmpeg のソースは上流と同じく LGPL-2.1+ (一部 GPL)。リリースのビルドは LGPL 構成
 (`--enable-gpl` / `--enable-nonfree` なし)。ワークフローのファイルも同じ条件で扱ってよい。
-`slim` が静的に取り込む依存は dav1d (BSD-2-Clause)・soxr (LGPL-2.1+)・zlib (Zlib)。
+`slim` が静的に取り込む依存は dav1d (BSD-2-Clause)・soxr (LGPL-2.1+)・zlib (Zlib)・Opus (BSD-3-Clause)・LAME (LGPL-2.0+)、ヘッダーだけの nv-codec-headers (MIT)。
 その許諾文は DamukoPla の配布物 (`runtimes\win-x64\FFMPEG-DEPS-NOTICE.txt`) に入れている。
