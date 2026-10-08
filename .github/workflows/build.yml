@@ -167,15 +167,17 @@ jobs:
           echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
           docker pull "$BUILD_IMAGE"
 
-      # slim の依存の tarball を取り、SHA-256 を確かめてから派生イメージに渡す
+      # slim の依存の tarball を取り、SHA-256 を確かめてから派生イメージに渡す。
+      # linux64 は nv-codec-headers だけを差し替える (linux/Dockerfile)
       - name: Fetch slim dependencies
-        if: inputs.config == 'slim'
+        if: inputs.config == 'slim' || inputs.target == 'linux64'
         working-directory: workflow/slim
         run: |
           set -euo pipefail
           mkdir -p sources
           while read -r name version license url sha256; do
             [[ -z "$name" || "$name" == \#* ]] && continue
+            [[ "$TARGET" != linux64 || "$name" == ffnvcodec ]] || continue
             case "$url" in
               *.tar.xz) ext=tar.xz ;;
               *.tar.gz) ext=tar.gz ;;
@@ -227,6 +229,13 @@ jobs:
               --build-arg BASE_IMAGE="$BUILD_IMAGE" \
               --build-arg FF_CONFIGURE="$ff_configure" \
               -t "$image" workflow/slim
+          elif [[ "$TARGET" == linux64 ]]; then
+            # BtbN の最新は nv-codec-headers 13.1 (ドライバー 610 以上) で組む。Windows 版の slim と同じ
+            # 13.0.19.1 (ドライバー 570 以上) に差し替える。ほかの依存と構成は BtbN のまま
+            docker build --pull=false \
+              --build-arg BASE_IMAGE="$BUILD_IMAGE" \
+              -f workflow/linux/Dockerfile \
+              -t "$image" workflow
           else
             docker tag "$BUILD_IMAGE" "$image"
           fi
@@ -279,6 +288,12 @@ jobs:
             dependencies="$(jq -Rn '[inputs | select(test("^\\s*(#|$)") | not) | [splits("\\s+")]
               | { name: .[0], version: .[1], license: .[2], url: .[3], sha256: .[4] }]' \
               < workflow/slim/sources.txt)"
+          elif [[ "$TARGET" == linux64 ]]; then
+            # BtbN のイメージの依存のうち、差し替えた nv-codec-headers
+            dependencies="$(jq -Rn '[inputs | select(test("^\\s*(#|$)") | not) | [splits("\\s+")]
+              | select(.[0] == "ffnvcodec")
+              | { name: .[0], version: .[1], license: .[2], url: .[3], sha256: .[4] }]' \
+              < workflow/slim/sources.txt)"
           else
             # BtbN のイメージの依存。版は btbn_commit のスクリプトにある
             dependencies=null
@@ -324,7 +339,7 @@ jobs:
             echo "  依存 (dav1d・soxr・zlib・nv-codec-headers・Opus・LAME) を正式リリースから組み直したイメージで組む。"
             echo "  同じタグを構成を変えて組み直したものは \`-slim-r<版>\` で、版の大きいものが新しい"
             echo "  構成と依存はこの fork の \`damukopla\` 枝の \`slim/\` にある"
-            echo "- \`...-linux64-lgpl-${ADDIN}.tar.xz\` (Linux x86-64、static、full): BtbN の構成のまま。"
+            echo "- \`...-linux64-lgpl-${ADDIN}.tar.xz\` (Linux x86-64、static、full): BtbN の構成のまま (nv-codec-headers だけ 13.0.19.1 に差し替え)。"
             echo "  DamukoPla のメディアサーバーが変換に使う \`ffmpeg\` の CLI"
             echo
             echo "上流の FFmpeg からの変更点は、ソースのタグと上流の差分で確かめられます。"
