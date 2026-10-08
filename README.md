@@ -39,6 +39,8 @@ GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) �
 
 `linux64` は `full` だけを組む (`slim/` は mingw-w64 の構成)。サーバーは `ffmpeg` を子プロセスで回すだけなので、
 1 つの実行ファイルで済む static にした。
+BtbN の最新のイメージは nv-codec-headers 13.1 (NVIDIA のドライバー 610 以上) で組むので、`linux/Dockerfile` で
+`slim` と同じ 13.0.19.1 (ドライバー 570 以上) に差し替えた派生イメージで組む (ヘッダーだけなので、ほかは BtbN のまま)。
 
 `slim` は、写したイメージから `slim/Dockerfile` で派生イメージを作って組む。
 
