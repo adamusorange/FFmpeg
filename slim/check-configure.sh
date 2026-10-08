@@ -45,7 +45,8 @@ if ! grep -q '^External libraries:$' "$log"; then
 fi
 
 expect_exactly 'External libraries:' 'libdav1d libmp3lame libopus libsoxr zlib'
-expect_exactly 'External libraries providing hardware acceleration:' 'd3d11va ffnvcodec nvenc'
+# cuda は NVENC が引き込む、実行時に読み込む CUDA の口 (SDK は要らない)
+expect_exactly 'External libraries providing hardware acceleration:' 'cuda d3d11va ffnvcodec nvenc'
 expect_exactly 'Libraries:' 'avcodec avfilter avformat avutil swresample swscale'
 expect_exactly 'Enabled hwaccels:' '
     av1_d3d11va av1_d3d11va2 h264_d3d11va h264_d3d11va2 hevc_d3d11va hevc_d3d11va2
