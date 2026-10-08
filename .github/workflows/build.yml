@@ -1,14 +1,19 @@
-# この fork のタグから、FFmpeg の Windows 向け LGPL shared を組んでリリースに上げる。
+# この fork のタグから、FFmpeg の LGPL のビルドを組んでリリースに上げる。
 #
 # 組み方は BtbN/FFmpeg-Builds のスクリプトをそのまま使う (改造しない)。
 # 差し替えるのは FFmpeg のソースの取得元 (FFMPEG_REPO_OVERRIDE / GIT_BRANCH_OVERRIDE) と、
 # 構成が slim のときのビルド用イメージ (slim/ の Dockerfile で派生させたもの)。
 # ビルド用イメージは copy-image.yml で写したものを digest で固定する。
 #
+# 向け先 (target):
+#   win64    Windows 向けの LGPL shared (DLL)。DamukoPla (Windows 版) が使う
+#   linux64  Linux (x86-64) 向けの LGPL static。DamukoPla のメディアサーバーが変換に使う ffmpeg の CLI。
+#            構成は full だけ (slim/ は mingw-w64 の構成のため)
+#
 # 構成:
-#   full  BtbN の win64-lgpl-shared の構成のまま。DamukoPla では見本を作る道具として使う
-#   slim  DamukoPla が使う部品だけに絞った構成 (slim/configure.txt)。DamukoPla が同梱する
-# 同じタグのリリースに両方を並べる。slim の資産名には -slim を付ける (BtbN の出力名が同じになるため)。
+#   full  BtbN の <target>-<variant> の構成のまま。Windows では見本を作る道具、Linux ではサーバーの変換に使う
+#   slim  DamukoPla が使う部品だけに絞った構成 (slim/configure.txt)。DamukoPla が同梱する (win64 だけ)
+# 同じタグのリリースに並べる。slim の資産名には -slim を付ける (BtbN の出力名が同じになるため)。
 #
 # 試しの組 (部品を外したときの大きさ、LTO など) は extra_configure で slim の configure に引数を足し、
 # publish を外してリリースに上げずに Actions の成果物として残す。
@@ -21,6 +26,13 @@ on:
         description: 組むタグ (この fork のもの)
         required: true
         default: n9.0.1-damuko-9b0578816c-oapvfix-slices256
+      target:
+        description: 向け先 (win64 は Windows 版の同梱用、linux64 はメディアサーバーの変換用で構成は full だけ)
+        type: choice
+        options:
+          - win64
+          - linux64
+        default: win64
       config:
         description: 構成 (slim は同梱用、full は見本を作る道具用)
         type: choice
@@ -57,11 +69,16 @@ permissions:
 env:
   BTBN_REPOSITORY: https://github.com/BtbN/FFmpeg-Builds.git
   BTBN_COMMIT: 54e192626545d0234b2a1383a34a29169cf52877
-  # copy-image.yml で 2026-09-27 に写したもの。写す元は BUILD_IMAGE_SOURCE
-  BUILD_IMAGE: ghcr.io/adamusorange/ffmpeg/win64-lgpl-shared-9.0@sha256:9bf576f1e75f4b3b456ef71793e52a93ee2b777f51c78b5b19742a83d187e897
-  BUILD_IMAGE_SOURCE: ghcr.io/btbn/ffmpeg-builds/win64-lgpl-shared-9.0@sha256:9bf576f1e75f4b3b456ef71793e52a93ee2b777f51c78b5b19742a83d187e897
-  TARGET: win64
-  VARIANT: lgpl-shared
+  # copy-image.yml で写したもの (win64 は 2026-09-27、linux64 は 2026-10-09)。写す元は BUILD_IMAGE_SOURCE
+  BUILD_IMAGE: ${{ inputs.target == 'linux64'
+    && 'ghcr.io/adamusorange/ffmpeg/linux64-lgpl-9.0@sha256:82aa09309d711f2b83f3500bfea10bfe085c595fa328557c3fa281f6b5b0c5f7'
+    || 'ghcr.io/adamusorange/ffmpeg/win64-lgpl-shared-9.0@sha256:9bf576f1e75f4b3b456ef71793e52a93ee2b777f51c78b5b19742a83d187e897' }}
+  BUILD_IMAGE_SOURCE: ${{ inputs.target == 'linux64'
+    && 'ghcr.io/btbn/ffmpeg-builds/linux64-lgpl-9.0@sha256:82aa09309d711f2b83f3500bfea10bfe085c595fa328557c3fa281f6b5b0c5f7'
+    || 'ghcr.io/btbn/ffmpeg-builds/win64-lgpl-shared-9.0@sha256:9bf576f1e75f4b3b456ef71793e52a93ee2b777f51c78b5b19742a83d187e897' }}
+  TARGET: ${{ inputs.target }}
+  # Linux はサーバーの CLI だけに使うので、1 つの実行ファイルで済む static にする
+  VARIANT: ${{ inputs.target == 'linux64' && 'lgpl' || 'lgpl-shared' }}
   ADDIN: "9.0"
   CONFIG: ${{ inputs.config }}
   EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
@@ -87,6 +104,14 @@ jobs:
           fi
           if [[ "$CONFIG" != full && "$CONFIG" != slim ]]; then
             echo "::error::構成は full か slim です: ${CONFIG}"
+            exit 1
+          fi
+          if [[ "$TARGET" != win64 && "$TARGET" != linux64 ]]; then
+            echo "::error::向け先は win64 か linux64 です: ${TARGET}"
+            exit 1
+          fi
+          if [[ "$TARGET" == linux64 && "$CONFIG" != full ]]; then
+            echo "::error::linux64 は full だけです (slim/ は mingw-w64 の構成)"
             exit 1
           fi
           if [[ -n "$REVISION" && ( "$CONFIG" != slim || ! "$REVISION" =~ ^[0-9]+$ ) ]]; then
@@ -236,12 +261,15 @@ jobs:
           [[ "$CONFIG" == full ]] || asset="${BUILD_NAME}-${CONFIG}"
           # 同じタグを構成を変えて組み直したもの。資産は上書きしないので名前を変える
           [[ -z "$REVISION" ]] || asset="${asset}-r${REVISION}"
-          zip="btbn/artifacts/${asset}.zip"
+          # BtbN は Windows を zip、Linux を tar.xz にまとめる
+          ext=zip
+          [[ "$TARGET" != linux64 ]] || ext=tar.xz
+          archive="btbn/artifacts/${asset}.${ext}"
           if [[ "$asset" != "$BUILD_NAME" ]]; then
-            mv "btbn/artifacts/${BUILD_NAME}.zip" "$zip"
+            mv "btbn/artifacts/${BUILD_NAME}.${ext}" "$archive"
           fi
-          test -f "$zip"
-          sha256="$(sha256sum "$zip" | cut -d' ' -f1)"
+          test -f "$archive"
+          sha256="$(sha256sum "$archive" | cut -d' ' -f1)"
 
           # build.sh がコンテナの中で実際に渡した configure の引数 (set -x の出力)
           configure_command="$(grep -m1 '^+ ./configure ' build.log | sed 's/^+ //')"
@@ -274,29 +302,33 @@ jobs:
             --argjson dependencies "$dependencies" \
             --arg workflow_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg archive_name "${asset}.zip" \
+            --arg archive_name "${asset}.${ext}" \
             --arg archive_sha256 "$sha256" \
             '$ARGS.named' > "btbn/artifacts/${asset}.json"
           cat "btbn/artifacts/${asset}.json"
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+          echo "ext=${ext}" >> "$GITHUB_OUTPUT"
 
+          # リリースの説明は、どの向け先を組んだときも同じ文にする (後から組んだものが上書きするため)
           {
-            echo "FFmpeg の Windows 向け LGPL shared ビルド (${TARGET}-${VARIANT}-${ADDIN})。"
+            echo "FFmpeg の LGPL ビルド (\`${ADDIN}\` 系)。"
             echo
             echo "- ソース: [\`${SOURCE_TAG}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${SOURCE_COMMIT}) (\`${SOURCE_COMMIT}\`)"
             echo "- 組み方: [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/tree/${BTBN_COMMIT}) のスクリプトをそのまま使用"
-            echo "- ビルド用イメージ: \`${BUILD_IMAGE}\` (元は \`${BUILD_IMAGE_SOURCE}\`)"
+            echo "- ビルド用イメージは資産ごとの \`.json\` の \`build_image\` にある"
             echo
-            echo "構成は 2 つあり、資産名で見分けます。"
+            echo "資産名で見分けます。"
             echo
-            echo "- \`...-${ADDIN}.zip\` (full): BtbN の構成のまま"
-            echo "- \`...-${ADDIN}-slim.zip\` (slim): DamukoPla が使う部品だけに絞った構成。"
+            echo "- \`...-win64-lgpl-shared-${ADDIN}.zip\` (Windows、full): BtbN の構成のまま"
+            echo "- \`...-win64-lgpl-shared-${ADDIN}-slim.zip\` (Windows、slim): DamukoPla が使う部品だけに絞った構成。"
             echo "  依存 (dav1d・soxr・zlib・nv-codec-headers・Opus・LAME) を正式リリースから組み直したイメージで組む。"
             echo "  同じタグを構成を変えて組み直したものは \`-slim-r<版>\` で、版の大きいものが新しい"
             echo "  構成と依存はこの fork の \`damukopla\` 枝の \`slim/\` にある"
+            echo "- \`...-linux64-lgpl-${ADDIN}.tar.xz\` (Linux x86-64、static、full): BtbN の構成のまま。"
+            echo "  DamukoPla のメディアサーバーが変換に使う \`ffmpeg\` の CLI"
             echo
             echo "上流の FFmpeg からの変更点は、ソースのタグと上流の差分で確かめられます。"
-            echo "資産ごとの \`.json\` に、ソース・スクリプト・イメージ・configure の引数・依存と zip の SHA-256 を記録しています。"
+            echo "資産ごとの \`.json\` に、ソース・スクリプト・イメージ・configure の引数・依存とアーカイブの SHA-256 を記録しています。"
           } > btbn/artifacts/notes.md
 
       - name: Publish release
@@ -306,6 +338,7 @@ jobs:
           SOURCE_TAG: ${{ inputs.source_tag }}
           PRERELEASE: ${{ inputs.prerelease }}
           ASSET: ${{ steps.describe.outputs.asset }}
+          EXT: ${{ steps.describe.outputs.ext }}
         run: |
           set -euo pipefail
           if gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
@@ -320,7 +353,7 @@ jobs:
           fi
           # 同じ名前の資産は上書きしない。取り込み側は SHA-256 で固定している
           gh release upload "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
-            "btbn/artifacts/${ASSET}.zip" "btbn/artifacts/${ASSET}.json"
+            "btbn/artifacts/${ASSET}.${EXT}" "btbn/artifacts/${ASSET}.json"
 
       - name: Upload artifact
         if: ${{ !inputs.publish }}
@@ -328,7 +361,7 @@ jobs:
         with:
           name: ${{ steps.describe.outputs.asset }}
           path: |
-            btbn/artifacts/${{ steps.describe.outputs.asset }}.zip
+            btbn/artifacts/${{ steps.describe.outputs.asset }}.${{ steps.describe.outputs.ext }}
             btbn/artifacts/${{ steps.describe.outputs.asset }}.json
             build.log
           if-no-files-found: error
