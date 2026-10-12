@@ -9,6 +9,7 @@
 #   win64    Windows 向けの LGPL shared (DLL)。DamukoPla (Windows 版) が使う
 #   linux64  Linux (x86-64) 向けの LGPL static。DamukoPla のメディアサーバーが変換に使う ffmpeg の CLI。
 #            構成は full だけ (slim/ は mingw-w64 の構成のため)
+#   Android (arm64-v8a) は BtbN のスクリプトが持たないので、別のワークフロー (build-android.yml) で NDK で組む
 #
 # 構成:
 #   full  BtbN の <target>-<variant> の構成のまま。Windows では見本を作る道具、Linux ではサーバーの変換に使う
@@ -57,7 +58,8 @@ on:
         required: false
         default: ""
 
-# 同じタグのリリースを 2 つの構成が同時に作らないようにする。リリースに上げない試しの組は並べて回せる
+# 同じタグのリリースを 2 つの構成が同時に作らないようにする (build-android.yml と同じ組)。
+# リリースに上げない試しの組は並べて回せる
 concurrency:
   group: release-${{ inputs.source_tag }}${{ !inputs.publish && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: false
@@ -193,38 +195,8 @@ jobs:
           # build.sh が使う名前。手元にあるので build.sh は取りに行かない
           image="ghcr.io/${GITHUB_REPOSITORY,,}/${TARGET}-${VARIANT}-${ADDIN}:latest"
           if [[ "$CONFIG" == slim ]]; then
-            ff_configure="$(sed 's/#.*//' workflow/slim/configure.txt | xargs)"
-            # configure は、--enable-<種類>=<名前> で求めた部品が後から外れると「Disabled ... because」と警告し、
-            # --fatal-warnings で止まる。足す引数で外す部品は、元の構成の --enable-<種類>=... から抜いておく
-            set -f
-            for extra in $EXTRA_CONFIGURE; do
-              [[ "$extra" =~ ^--disable-([a-z]+)=(.+)$ ]] || continue
-              kind="${BASH_REMATCH[1]}"
-              IFS=',' read -ra names <<< "${BASH_REMATCH[2]}"
-              rebuilt=()
-              for arg in $ff_configure; do
-                if [[ "$arg" != --enable-"$kind"=* ]]; then
-                  rebuilt+=("$arg")
-                  continue
-                fi
-                IFS=',' read -ra items <<< "${arg#*=}"
-                kept=()
-                for item in "${items[@]}"; do
-                  drop=
-                  for name in "${names[@]}"; do
-                    [[ "$item" == "$name" ]] && drop=1
-                  done
-                  [[ -n "$drop" ]] || kept+=("$item")
-                done
-                if (( ${#kept[@]} )); then
-                  rebuilt+=("--enable-${kind}=$(IFS=,; echo "${kept[*]}")")
-                fi
-              done
-              ff_configure="${rebuilt[*]}"
-            done
-            set +f
-            # 後に書いた引数が勝つので、足す引数は末尾に置く
-            [[ -z "$EXTRA_CONFIGURE" ]] || ff_configure="${ff_configure} ${EXTRA_CONFIGURE}"
+            # 足す引数で外す部品は、元の構成の --enable-<種類>=... から抜く (compose-configure.sh)
+            ff_configure="$(bash workflow/.github/scripts/compose-configure.sh workflow/slim/configure.txt "$EXTRA_CONFIGURE")"
             docker build --pull=false \
               --build-arg BASE_IMAGE="$BUILD_IMAGE" \
               --build-arg FF_CONFIGURE="$ff_configure" \
@@ -324,27 +296,8 @@ jobs:
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
           echo "ext=${ext}" >> "$GITHUB_OUTPUT"
 
-          # リリースの説明は、どの向け先を組んだときも同じ文にする (後から組んだものが上書きするため)
-          {
-            echo "FFmpeg の LGPL ビルド (\`${ADDIN}\` 系)。"
-            echo
-            echo "- ソース: [\`${SOURCE_TAG}\`](https://github.com/${GITHUB_REPOSITORY}/tree/${SOURCE_COMMIT}) (\`${SOURCE_COMMIT}\`)"
-            echo "- 組み方: [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/tree/${BTBN_COMMIT}) のスクリプトをそのまま使用"
-            echo "- ビルド用イメージは資産ごとの \`.json\` の \`build_image\` にある"
-            echo
-            echo "資産名で見分けます。"
-            echo
-            echo "- \`...-win64-lgpl-shared-${ADDIN}.zip\` (Windows、full): BtbN の構成のまま"
-            echo "- \`...-win64-lgpl-shared-${ADDIN}-slim.zip\` (Windows、slim): DamukoPla が使う部品だけに絞った構成。"
-            echo "  依存 (dav1d・soxr・zlib・nv-codec-headers・Opus・LAME) を正式リリースから組み直したイメージで組む。"
-            echo "  同じタグを構成を変えて組み直したものは \`-slim-r<版>\` で、版の大きいものが新しい"
-            echo "  構成と依存はこの fork の \`damukopla\` 枝の \`slim/\` にある"
-            echo "- \`...-linux64-lgpl-${ADDIN}.tar.xz\` (Linux x86-64、static、full): BtbN の構成のまま (nv-codec-headers だけ 13.0.19.1 に差し替え)。"
-            echo "  DamukoPla のメディアサーバーが変換に使う \`ffmpeg\` の CLI"
-            echo
-            echo "上流の FFmpeg からの変更点は、ソースのタグと上流の差分で確かめられます。"
-            echo "資産ごとの \`.json\` に、ソース・スクリプト・イメージ・configure の引数・依存とアーカイブの SHA-256 を記録しています。"
-          } > btbn/artifacts/notes.md
+          # リリースの説明は、どの向け先を組んだときも同じ文にする (build-android.yml と共有)
+          bash workflow/.github/scripts/release-notes.sh > btbn/artifacts/notes.md
 
       - name: Publish release
         if: inputs.publish

@@ -1,0 +1,279 @@
+# この fork のタグから、Android (arm64-v8a) 向けの FFmpeg の LGPL の .so を組んでリリースに上げる。
+# DamukoPla の Android 版が同梱する (DamukoPla の plan 10 章)。
+#
+# BtbN/FFmpeg-Builds のスクリプトは Android を持たないので、NDK で組む (android/build.sh)。
+# 部品の選び方は slim と同じで、hwaccel と変換の部品を持たない (android/configure.txt)。
+# 依存 (zlib・soxr・dav1d) は slim/sources.txt と同じ tarball・SHA-256 から静的に組んで抱える。
+# NDK の版と API レベルは DamukoPla (NDK r29、minSdk 35) に合わせてここで固定する。
+#
+# 資産は build.yml の組と同じタグのリリースに並べる。
+# 試しの組 (部品を外したときの大きさなど) は extra_configure で configure に引数を足し、
+# publish を外してリリースに上げずに Actions の成果物として残す。
+name: Build FFmpeg for Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: 組むタグ (この fork のもの)
+        required: true
+        default: n9.0.1-damuko-9b0578816c-oapvfix-slices256
+      prerelease:
+        description: プレリリースにする (リリースがまだ無いときだけ効く)
+        type: boolean
+        default: false
+      extra_configure:
+        description: configure に足す引数 (試しの組。例 --disable-encoder=mpeg4)
+        required: false
+        default: ""
+      publish:
+        description: リリースに上げる (外すと Actions の成果物として残す)
+        type: boolean
+        default: true
+      revision:
+        description: 組の版。同じタグを構成を変えて組み直すとき、資産名に -r<版> を付ける (空なら付けない)
+        required: false
+        default: ""
+
+# build.yml と同じ組。同じタグのリリースを同時に作らない。リリースに上げない試しの組は並べて回せる
+concurrency:
+  group: release-${{ inputs.source_tag }}${{ !inputs.publish && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # DamukoPla の android の ndkVersion と minSdk に合わせる。SHA-1 は Google の SDK の一覧
+  # (repository2-3.xml の ndk;29.0.14206865) と照らした
+  NDK_VERSION: 29.0.14206865
+  NDK_URL: https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+  NDK_SHA256: 4abbbcdc842f3d4879206e9695d52709603e52dd68d3c1fff04b3b5e7a308ecf
+  ANDROID_API: "35"
+  ANDROID_ABI: arm64-v8a
+  # slim/sources.txt の名前。この順に組む
+  ANDROID_DEPS: zlib soxr dav1d
+  MESON_VERSION: 1.9.1
+  NINJA_VERSION: 1.13.0
+  ADDIN: "9.0"
+  CONFIG: slim
+  EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
+  PUBLISH: ${{ inputs.publish }}
+  REVISION: ${{ inputs.revision }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve source
+        id: source
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REVISION" && ! "$REVISION" =~ ^[0-9]+$ ]]; then
+            echo "::error::revision は数です: ${REVISION}"
+            exit 1
+          fi
+          # 足した引数で組んだものを、正式な資産と取り違えないようにする
+          if [[ -n "$EXTRA_CONFIGURE" && "$PUBLISH" == true ]]; then
+            echo "::error::extra_configure を使うときは publish を外してください"
+            exit 1
+          fi
+          refs="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${SOURCE_TAG}" "refs/tags/${SOURCE_TAG}^{}")"
+          # 注釈付きのタグなら ^{} がコミットを指す
+          commit="$(awk -v t="refs/tags/${SOURCE_TAG}^{}" '$2 == t { print $1 }' <<< "$refs")"
+          [[ -n "$commit" ]] || commit="$(awk -v t="refs/tags/${SOURCE_TAG}" '$2 == t { print $1 }' <<< "$refs")"
+          if [[ -z "$commit" ]]; then
+            echo "::error::タグがありません: ${SOURCE_TAG}"
+            exit 1
+          fi
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      # android/ と slim/sources.txt を読むため、このワークフローのコミットを取る
+      - name: Fetch workflow files
+        run: |
+          set -euo pipefail
+          git init -q workflow
+          git -C workflow fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git -C workflow checkout -q --detach FETCH_HEAD
+
+      # FFmpeg は版の表示を git describe で決めるので、タグごと取る
+      - name: Fetch FFmpeg source
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "$SOURCE_TAG" "https://github.com/${GITHUB_REPOSITORY}.git" ffmpeg
+          test "$(git -C ffmpeg rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      # ランナーに入っている NDK は版が動くので使わない
+      - name: Install NDK
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/ndk.zip" "$NDK_URL"
+          echo "${NDK_SHA256}  ${RUNNER_TEMP}/ndk.zip" | sha256sum -c -
+          unzip -q "${RUNNER_TEMP}/ndk.zip" -d "${RUNNER_TEMP}/ndk"
+          rm "${RUNNER_TEMP}/ndk.zip"
+          root="$(find "${RUNNER_TEMP}/ndk" -mindepth 1 -maxdepth 1 -type d)"
+          revision="$(sed -n 's/^Pkg.Revision *= *//p' "${root}/source.properties")"
+          if [[ "$revision" != "$NDK_VERSION" ]]; then
+            echo "::error::NDK の版が違います: ${revision} (求めたのは ${NDK_VERSION})"
+            exit 1
+          fi
+          echo "ANDROID_NDK_ROOT=${root}" >> "$GITHUB_ENV"
+          echo "READELF=${root}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          pipx install "meson==${MESON_VERSION}"
+          pipx install "ninja==${NINJA_VERSION}"
+          meson --version
+          ninja --version
+          cmake --version | head -1
+
+      - name: Fetch dependencies
+        working-directory: workflow/slim
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/sources"
+          found=0
+          while read -r name version license url sha256; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            [[ " ${ANDROID_DEPS} " == *" ${name} "* ]] || continue
+            case "$url" in
+              *.tar.xz) ext=tar.xz ;;
+              *.tar.gz) ext=tar.gz ;;
+              *) echo "::error::tarball の形が分かりません: ${url}"; exit 1 ;;
+            esac
+            curl -fsSL --retry 3 -o "${GITHUB_WORKSPACE}/sources/${name}.${ext}" "$url" < /dev/null
+            echo "${sha256}  ${GITHUB_WORKSPACE}/sources/${name}.${ext}" | sha256sum -c -
+            found=$((found + 1))
+          done < sources.txt
+          test "$found" -eq "$(wc -w <<< "$ANDROID_DEPS")"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          # 足す引数で外す部品は、元の構成の --enable-<種類>=... から抜く (compose-configure.sh)
+          FF_CONFIGURE="$(bash workflow/.github/scripts/compose-configure.sh workflow/android/configure.txt "$EXTRA_CONFIGURE")"
+          export FF_CONFIGURE
+          bash workflow/android/build.sh sources ffmpeg work out 2>&1 | tee build.log
+
+      # 試しの組は、決めた構成から外れるのが目的なので、結果を残すだけで止めない
+      - name: Check configure
+        continue-on-error: ${{ inputs.extra_configure != '' }}
+        run: bash workflow/android/check-configure.sh build.log
+
+      - name: Check libraries
+        run: bash workflow/android/check-libs.sh out/lib
+
+      - name: Describe build
+        id: describe
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # DamukoPla の取り込みは版の表示がタグで始まることを確かめる
+          if ! grep -Fq "#define FFMPEG_VERSION \"${SOURCE_TAG}\"" out/include/libavutil/ffversion.h; then
+            echo "::error::版の表示がタグと違います"
+            grep FFMPEG_VERSION out/include/libavutil/ffversion.h
+            exit 1
+          fi
+
+          asset="ffmpeg-${SOURCE_TAG}-android-arm64-lgpl-shared-${ADDIN}-${CONFIG}"
+          # 同じタグを構成を変えて組み直したもの。資産は上書きしないので名前を変える
+          [[ -z "$REVISION" ]] || asset="${asset}-r${REVISION}"
+          mkdir -p "artifacts/${asset}"
+          cp -a out/include out/lib "artifacts/${asset}/"
+          # --enable-version3 なので LGPL 3
+          cp ffmpeg/COPYING.LGPLv3 "artifacts/${asset}/LICENSE.txt"
+          mtime="$(git -C ffmpeg log -1 --format=%ct)"
+          tar -C artifacts --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${mtime}" \
+            -cJf "artifacts/${asset}.tar.xz" "$asset"
+          sha256="$(sha256sum "artifacts/${asset}.tar.xz" | cut -d' ' -f1)"
+
+          libraries="$(for so in out/lib/lib*.so; do
+              jq -n --arg name "$(basename "$so")" --argjson size "$(stat -c %s "$so")" \
+                --arg sha256 "$(sha256sum "$so" | cut -d' ' -f1)" '$ARGS.named'
+            done | jq -s .)"
+          dependencies="$(jq -Rn --arg deps "$ANDROID_DEPS" '($deps | split(" ")) as $names
+            | [inputs | select(test("^\\s*(#|$)") | not) | [splits("\\s+")]
+            | select(.[0] as $n | $names | index($n))
+            | { name: .[0], version: .[1], license: .[2], url: .[3], sha256: .[4] }]' \
+            < workflow/slim/sources.txt)"
+          tools="$(jq -n \
+            --arg cmake "$(cmake --version | head -1 | awk '{ print $3 }')" \
+            --arg meson "$(meson --version)" \
+            --arg ninja "$(ninja --version)" \
+            '$ARGS.named')"
+
+          jq -n \
+            --arg config "$CONFIG" \
+            --arg revision "$REVISION" \
+            --arg source_repository "https://github.com/${GITHUB_REPOSITORY}" \
+            --arg source_tag "$SOURCE_TAG" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg workflow_commit "$GITHUB_SHA" \
+            --arg target android-arm64 \
+            --arg abi "$ANDROID_ABI" \
+            --arg api_level "$ANDROID_API" \
+            --arg ndk_version "$NDK_VERSION" \
+            --arg ndk_url "$NDK_URL" \
+            --arg ndk_sha256 "$NDK_SHA256" \
+            --argjson tools "$tools" \
+            --arg addin "$ADDIN" \
+            --arg configure_command "$(cat work/configure-command.txt)" \
+            --argjson dependencies "$dependencies" \
+            --argjson libraries "$libraries" \
+            --arg workflow_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg archive_name "${asset}.tar.xz" \
+            --arg archive_sha256 "$sha256" \
+            '$ARGS.named' > "artifacts/${asset}.json"
+          cat "artifacts/${asset}.json"
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+
+          # リリースの説明は、どの向け先を組んだときも同じ文にする (build.yml と共有)
+          bash workflow/.github/scripts/release-notes.sh > artifacts/notes.md
+
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          ASSET: ${{ steps.describe.outputs.asset }}
+        run: |
+          set -euo pipefail
+          if gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file artifacts/notes.md
+          else
+            flags=()
+            if [[ "$PRERELEASE" == "true" ]]; then
+              flags+=(--prerelease --latest=false)
+            fi
+            gh release create "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$SOURCE_TAG" --notes-file artifacts/notes.md "${flags[@]}"
+          fi
+          # 同じ名前の資産は上書きしない。取り込み側は SHA-256 で固定している
+          gh release upload "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            "artifacts/${ASSET}.tar.xz" "artifacts/${ASSET}.json"
+
+      - name: Upload artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.describe.outputs.asset }}
+          path: |
+            artifacts/${{ steps.describe.outputs.asset }}.tar.xz
+            artifacts/${{ steps.describe.outputs.asset }}.json
+            build.log
+          if-no-files-found: error
