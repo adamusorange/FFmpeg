@@ -9,7 +9,7 @@
 #   win64    Windows 向けの LGPL shared (DLL)。DamukoPla (Windows 版) が使う
 #   linux64  Linux (x86-64) 向けの LGPL static。DamukoPla のメディアサーバーが変換に使う ffmpeg の CLI。
 #            構成は full だけ (slim/ は mingw-w64 の構成のため)
-#   Android (arm64-v8a) は BtbN のスクリプトが持たないので、別のワークフロー (build-android.yml) で NDK で組む
+#   Android (arm64-v8a) と WebAssembly は BtbN のスクリプトが持たないので、別のワークフロー (build-android.yml・build-wasm.yml) で組む
 #
 # 構成:
 #   full  BtbN の <target>-<variant> の構成のまま。Windows では見本を作る道具、Linux ではサーバーの変換に使う
@@ -58,7 +58,7 @@ on:
         required: false
         default: ""
 
-# 同じタグのリリースを 2 つの構成が同時に作らないようにする (build-android.yml と同じ組)。
+# 同じタグのリリースを 2 つの構成が同時に作らないようにする (build-android.yml・build-wasm.yml と同じ組)。
 # リリースに上げない試しの組は並べて回せる
 concurrency:
   group: release-${{ inputs.source_tag }}${{ !inputs.publish && format('-{0}', github.run_id) || '' }}
@@ -296,7 +296,7 @@ jobs:
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
           echo "ext=${ext}" >> "$GITHUB_OUTPUT"
 
-          # リリースの説明は、どの向け先を組んだときも同じ文にする (build-android.yml と共有)
+          # リリースの説明は、どの向け先を組んだときも同じ文にする (build-android.yml・build-wasm.yml と共有)
           bash workflow/.github/scripts/release-notes.sh > btbn/artifacts/notes.md
 
       - name: Publish release

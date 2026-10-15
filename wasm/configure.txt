@@ -1,0 +1,36 @@
+# wasm の構成の configure の引数のうち、部品の選び方。1 行に 1 つ以上、# から行末は読まない。
+# 向け先とツールチェーンの引数 (--arch=wasm、emcc など) は build.sh が足す。
+# DamukoPla のブラウザ版が使う (DamukoPla の plan 11.8・11.11、#202)。映像は解かずに fMP4 へ詰め直して MSE に渡し、
+# 解く・鳴らすは OS に任せる。FFmpeg が受け持つのは分離・詰め直しと、端末が鳴らせない音声の作り直し。
+
+# ライセンスは slim と同じ。自前のコードと別の wasm (player.wasm) に静的に繋ぐので、静的ライブラリにする
+--enable-version3 --disable-debug --enable-static --disable-shared
+# --fatal-warnings は使えない (--disable-pthreads で必ずスレッドの警告が出る)。
+# ほかの警告 (did not match anything、Disabled ... because) が無いことは check-configure.sh が見る
+
+# 自動で見つけたものは入れない。スレッドは使わない (wasm のスレッドを使う部品と一緒にするなら、pthreads で組み直す)
+--disable-autodetect --disable-pthreads --disable-w32threads --disable-os2threads
+# libc の iconv は --disable-autodetect でも探される。字幕の文字コードの変換に使うもので、字幕は解かないので外す
+--disable-iconv
+# 静的ライブラリは strip しない (要らない記号は emcc が繋ぐときに落とす)
+--disable-stripping
+
+--disable-programs --disable-doc
+--disable-avdevice --disable-devices --disable-network --disable-swscale --disable-avfilter --disable-filters
+--disable-hwaccels
+# 読み口は自前の AVIOContext
+--disable-protocols
+
+# 分離: DamukoPla が動画として扱う形式のうち、OS が解ける映像を入れうるもの (Matroska・WebM、MP4・MOV、MPEG-TS・M2TS、AVI) と、
+# 音楽の形式 (MP3・AAC・FLAC・Ogg・WAV。M4A は mov)
+--disable-demuxers --enable-demuxer=matroska,mov,mpegts,avi,mp3,aac,flac,ogg,wav
+# 分離が使うパーサー。映像は詰め直す形式 (H.264・HEVC・AV1・VP9)、音声は下のデコーダーの形式
+--disable-parsers --enable-parser=h264,hevc,av1,vp9,aac,ac3,mpegaudio,opus,vorbis,flac,dca,mlp
+# extract_extradata は MPEG-TS などで映像の extradata を拾う (avformat_find_stream_info が使う)。
+# aac_adtstoasc と vp9_superframe は mp4 の muxer が差し込む
+--disable-bsfs --enable-bsf=extract_extradata,aac_adtstoasc,vp9_superframe
+
+# 詰め直し (fMP4) と、端末が鳴らせない音声を AAC に作り直す。映像のデコーダーは持たない
+--disable-muxers --enable-muxer=mp4
+--disable-encoders --enable-encoder=aac
+--disable-decoders --enable-decoder=aac,ac3,eac3,mp3,mp2,opus,vorbis,flac,alac,pcm_s16le,pcm_s24le,pcm_f32le,truehd,dca

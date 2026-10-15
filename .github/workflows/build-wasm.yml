@@ -1,0 +1,244 @@
+# この fork のタグから、WebAssembly 向けの FFmpeg の LGPL の静的ライブラリを組んでリリースに上げる。
+# DamukoPla のブラウザ版が、自前のコードと別の wasm (player.wasm) に繋ぐ (DamukoPla の plan 11.8・11.11、#202)。
+#
+# BtbN/FFmpeg-Builds のスクリプトは wasm を持たないので、Emscripten で組む (wasm/build.sh)。
+# 部品は分離・fMP4 への詰め直し・音声の作り直しに要るものだけ (wasm/configure.txt)。外部ライブラリは使わない。
+# emsdk の版は DamukoPla の build-web.ps1 で使うもの (6.0.12) に合わせてここで固定する。
+#
+# 資産は build.yml・build-android.yml の組と同じタグのリリースに並べる。
+# 試しの組 (部品を外したときの大きさなど) は extra_configure で configure に引数を足し、
+# publish を外してリリースに上げずに Actions の成果物として残す。
+name: Build FFmpeg for WebAssembly
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: 組むタグ (この fork のもの)
+        required: true
+        default: n9.0.1-damuko-9b0578816c-oapvfix-slices256
+      prerelease:
+        description: プレリリースにする (リリースがまだ無いときだけ効く)
+        type: boolean
+        default: false
+      extra_configure:
+        description: configure に足す引数 (試しの組。例 --disable-encoder=aac)
+        required: false
+        default: ""
+      publish:
+        description: リリースに上げる (外すと Actions の成果物として残す)
+        type: boolean
+        default: true
+      revision:
+        description: 組の版。同じタグを構成を変えて組み直すとき、資産名に -r<版> を付ける (空なら付けない)
+        required: false
+        default: ""
+
+# build.yml と同じ組。同じタグのリリースを同時に作らない。リリースに上げない試しの組は並べて回せる
+concurrency:
+  group: release-${{ inputs.source_tag }}${{ !inputs.publish && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # emsdk のタグと、そのコミット (タグが動いたら止める)
+  EMSDK_VERSION: 6.0.12
+  EMSDK_COMMIT: 35ff8a6d150541276abbc6bae512ca90bcfbe220
+  EMSDK_REPOSITORY: https://github.com/emscripten-core/emsdk.git
+  ADDIN: "9.0"
+  CONFIG: wasm
+  EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
+  PUBLISH: ${{ inputs.publish }}
+  REVISION: ${{ inputs.revision }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Resolve source
+        id: source
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REVISION" && ! "$REVISION" =~ ^[0-9]+$ ]]; then
+            echo "::error::revision は数です: ${REVISION}"
+            exit 1
+          fi
+          # 足した引数で組んだものを、正式な資産と取り違えないようにする
+          if [[ -n "$EXTRA_CONFIGURE" && "$PUBLISH" == true ]]; then
+            echo "::error::extra_configure を使うときは publish を外してください"
+            exit 1
+          fi
+          refs="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/${SOURCE_TAG}" "refs/tags/${SOURCE_TAG}^{}")"
+          # 注釈付きのタグなら ^{} がコミットを指す
+          commit="$(awk -v t="refs/tags/${SOURCE_TAG}^{}" '$2 == t { print $1 }' <<< "$refs")"
+          [[ -n "$commit" ]] || commit="$(awk -v t="refs/tags/${SOURCE_TAG}" '$2 == t { print $1 }' <<< "$refs")"
+          if [[ -z "$commit" ]]; then
+            echo "::error::タグがありません: ${SOURCE_TAG}"
+            exit 1
+          fi
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+
+      # wasm/ を読むため、このワークフローのコミットを取る
+      - name: Fetch workflow files
+        run: |
+          set -euo pipefail
+          git init -q workflow
+          git -C workflow fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git -C workflow checkout -q --detach FETCH_HEAD
+
+      # FFmpeg は版の表示を git describe で決めるので、タグごと取る
+      - name: Fetch FFmpeg source
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "$SOURCE_TAG" "https://github.com/${GITHUB_REPOSITORY}.git" ffmpeg
+          test "$(git -C ffmpeg rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      - name: Install emsdk
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch "$EMSDK_VERSION" "$EMSDK_REPOSITORY" "${RUNNER_TEMP}/emsdk"
+          if [[ "$(git -C "${RUNNER_TEMP}/emsdk" rev-parse HEAD)" != "$EMSDK_COMMIT" ]]; then
+            echo "::error::emsdk のタグ ${EMSDK_VERSION} のコミットが固定したものと違います"
+            exit 1
+          fi
+          "${RUNNER_TEMP}/emsdk/emsdk" install "$EMSDK_VERSION"
+          "${RUNNER_TEMP}/emsdk/emsdk" activate "$EMSDK_VERSION"
+          # shellcheck disable=SC1091
+          source "${RUNNER_TEMP}/emsdk/emsdk_env.sh"
+          version="$(emcc --version | head -1)"
+          echo "$version"
+          if [[ "$version" != *" ${EMSDK_VERSION} "* ]]; then
+            echo "::error::emcc の版が ${EMSDK_VERSION} ではありません"
+            exit 1
+          fi
+          echo "EMSDK_ROOT=${RUNNER_TEMP}/emsdk" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source "${EMSDK_ROOT}/emsdk_env.sh"
+          # 足す引数で外す部品は、元の構成の --enable-<種類>=... から抜く (compose-configure.sh)
+          FF_CONFIGURE="$(bash workflow/.github/scripts/compose-configure.sh workflow/wasm/configure.txt "$EXTRA_CONFIGURE")"
+          export FF_CONFIGURE
+          bash workflow/wasm/build.sh ffmpeg work out 2>&1 | tee build.log
+
+      # 試しの組は、決めた構成から外れるのが目的なので、結果を残すだけで止めない
+      - name: Check configure
+        continue-on-error: ${{ inputs.extra_configure != '' }}
+        run: bash workflow/wasm/check-configure.sh build.log
+
+      - name: Check libraries
+        run: |
+          set -euo pipefail
+          expected="libavcodec.a libavformat.a libavutil.a libswresample.a"
+          actual="$(find out/lib -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | xargs)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::lib の中身が想定と違います: [${actual}] (想定 [${expected}])"
+            exit 1
+          fi
+          ls -l out/lib
+
+      - name: Describe build
+        id: describe
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source "${EMSDK_ROOT}/emsdk_env.sh" > /dev/null
+          # DamukoPla の取り込みは版の表示がタグで始まることを確かめる
+          if ! grep -Fq "#define FFMPEG_VERSION \"${SOURCE_TAG}\"" out/include/libavutil/ffversion.h; then
+            echo "::error::版の表示がタグと違います"
+            grep FFMPEG_VERSION out/include/libavutil/ffversion.h
+            exit 1
+          fi
+
+          asset="ffmpeg-${SOURCE_TAG}-wasm32-lgpl-static-${ADDIN}"
+          # 同じタグを構成を変えて組み直したもの。資産は上書きしないので名前を変える
+          [[ -z "$REVISION" ]] || asset="${asset}-r${REVISION}"
+          mkdir -p "artifacts/${asset}"
+          cp -a out/include out/lib "artifacts/${asset}/"
+          # --enable-version3 なので LGPL 3
+          cp ffmpeg/COPYING.LGPLv3 "artifacts/${asset}/LICENSE.txt"
+          mtime="$(git -C ffmpeg log -1 --format=%ct)"
+          tar -C artifacts --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${mtime}" \
+            -cJf "artifacts/${asset}.tar.xz" "$asset"
+          sha256="$(sha256sum "artifacts/${asset}.tar.xz" | cut -d' ' -f1)"
+
+          libraries="$(for lib in out/lib/lib*.a; do
+              jq -n --arg name "$(basename "$lib")" --argjson size "$(stat -c %s "$lib")" \
+                --arg sha256 "$(sha256sum "$lib" | cut -d' ' -f1)" '$ARGS.named'
+            done | jq -s .)"
+
+          jq -n \
+            --arg config "$CONFIG" \
+            --arg revision "$REVISION" \
+            --arg source_repository "https://github.com/${GITHUB_REPOSITORY}" \
+            --arg source_tag "$SOURCE_TAG" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg workflow_commit "$GITHUB_SHA" \
+            --arg target wasm32 \
+            --arg emsdk_version "$EMSDK_VERSION" \
+            --arg emsdk_commit "$EMSDK_COMMIT" \
+            --arg emcc_version "$(emcc --version | head -1)" \
+            --arg addin "$ADDIN" \
+            --arg configure_command "$(cat work/configure-command.txt)" \
+            --argjson dependencies '[]' \
+            --argjson libraries "$libraries" \
+            --arg workflow_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg archive_name "${asset}.tar.xz" \
+            --arg archive_sha256 "$sha256" \
+            '$ARGS.named' > "artifacts/${asset}.json"
+          cat "artifacts/${asset}.json"
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+
+          # リリースの説明は、どの向け先を組んだときも同じ文にする (build.yml・build-android.yml と共有)
+          bash workflow/.github/scripts/release-notes.sh > artifacts/notes.md
+
+      - name: Publish release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          ASSET: ${{ steps.describe.outputs.asset }}
+        run: |
+          set -euo pipefail
+          if gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file artifacts/notes.md
+          else
+            flags=()
+            if [[ "$PRERELEASE" == "true" ]]; then
+              flags+=(--prerelease --latest=false)
+            fi
+            gh release create "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$SOURCE_TAG" --notes-file artifacts/notes.md "${flags[@]}"
+          fi
+          # 同じ名前の資産は上書きしない。取り込み側は SHA-256 で固定している
+          gh release upload "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            "artifacts/${ASSET}.tar.xz" "artifacts/${ASSET}.json"
+
+      - name: Upload artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.describe.outputs.asset }}
+          path: |
+            artifacts/${{ steps.describe.outputs.asset }}.tar.xz
+            artifacts/${{ steps.describe.outputs.asset }}.json
+            build.log
+          if-no-files-found: error

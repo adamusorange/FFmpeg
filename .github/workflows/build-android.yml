@@ -241,7 +241,7 @@ jobs:
           cat "artifacts/${asset}.json"
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
 
-          # リリースの説明は、どの向け先を組んだときも同じ文にする (build.yml と共有)
+          # リリースの説明は、どの向け先を組んだときも同じ文にする (build.yml・build-wasm.yml と共有)
           bash workflow/.github/scripts/release-notes.sh > artifacts/notes.md
 
       - name: Publish release

@@ -32,6 +32,7 @@ GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) �
    向け先 (`target`) と構成 (`config`) を選ぶ
 3. `Build FFmpeg for Android` (`build-android.yml`): 入力のタグを、Android NDK で Android (arm64-v8a) 向けに組む。
    BtbN のスクリプトは Android を持たないので、`android/` のスクリプトで組む
+4. `Build FFmpeg for WebAssembly` (`build-wasm.yml`): 入力のタグを、Emscripten で WebAssembly 向けに組む (`wasm/` のスクリプト)
 
 | 向け先 | 構成 | 中身 | 資産名 | DamukoPla での使い道 |
 |---|---|---|---|---|
@@ -39,6 +40,7 @@ GitHub Actions で組み、リリースに上げる。この枝 (`damukopla`) �
 | `win64` | `full` | BtbN の `win64-lgpl-shared` の構成のまま | `ffmpeg-<版>-win64-lgpl-shared-9.0.zip` | 見本を作る道具 (同梱しない) |
 | `linux64` | `full` | BtbN の `linux64-lgpl` (static) の構成のまま | `ffmpeg-<版>-linux64-lgpl-9.0.tar.xz` | メディアサーバー (x86-64) が変換に使う `ffmpeg` の CLI (DamukoPla#148) |
 | `android-arm64` | `slim` | `slim` と同じ部品の選び方で、hwaccel と変換の部品を持たない (`android/configure.txt`) | `ffmpeg-<版>-android-arm64-lgpl-shared-9.0-slim.tar.xz` | Android 版が同梱する (DamukoPla#151) |
+| `wasm32` | `wasm` | 分離・fMP4 への詰め直し・音声の作り直しの部品だけ (`wasm/configure.txt`) | `ffmpeg-<版>-wasm32-lgpl-static-9.0.tar.xz` | ブラウザ版の `player.wasm` に繋ぐ (DamukoPla#202) |
 
 `linux64` は `full` だけを組む (`slim/` は mingw-w64 の構成)。サーバーは `ffmpeg` を子プロセスで回すだけなので、
 1 つの実行ファイルで済む static にした。
@@ -73,17 +75,35 @@ BtbN の最新のイメージは nv-codec-headers 13.1 (NVIDIA のドライバ�
   テキストの再配置 (TEXTREL) が無いこと、記号とデバッグ情報が落ちていることを見る
 - アーカイブ (tar.xz) の中身は `include/`・`lib/` (.so 6 本)・`LICENSE.txt` (LGPL 3)
 
-同じタグを構成を変えて組み直すとき (DamukoPla#147 で変換の部品を足したときなど) は、入力の `revision` に版を入れる。`slim` と `android-arm64` の資産名に `-r<版>` が付き (`...-9.0-slim-r2.zip`)、前の資産と並ぶ。DamukoPla の取り込みは版の大きいものを選ぶ。
+`wasm32` は `build-wasm.yml` が、ランナーに emsdk を入れて組む (`wasm/build.sh`)。
 
-リリースにはアーカイブ (Windows は zip、Linux と Android は tar.xz) と、構成・ソースのコミット・スクリプトのコミット・イメージの digest
-(Android は NDK の版と zip の SHA-256)・configure の引数・依存の版と SHA-256・アーカイブの SHA-256 を書いた `.json` を置く。
-Android の `.json` には .so ごとの大きさと SHA-256 も書く。
+- emsdk は DamukoPla の `build-web.ps1` と同じ 6.0.12 に、タグのコミットごとワークフローで固定する。`--arch=wasm`、`-O3 -msimd128`
+- DamukoPla のブラウザ版は、映像を解かずに fMP4 へ詰め直して MSE に渡し、解く・鳴らすは OS に任せる (DamukoPla の plan 11.8)。
+  FFmpeg が受け持つのは分離・詰め直しと、端末が鳴らせない音声を AAC に作り直すことだけ
+- 出すのは LGPL の静的ライブラリ 4 本 (avformat・avcodec・swresample・avutil) とヘッダー。自前のコードと別の wasm に繋ぐ。
+  外部ライブラリは使わない (Matroska・MOV の zlib で縮めたヘッダーは読めない)
+- 部品
+  - 分離: Matroska・WebM、MP4・MOV・M4A、MPEG-TS・M2TS、AVI と、音楽の MP3・AAC・FLAC・Ogg・WAV
+  - パーサー: 映像は H.264・HEVC・AV1・VP9、音声は下のデコーダーの形式
+  - bsf: `extract_extradata` (MPEG-TS などで映像の extradata を拾う)、`aac_adtstoasc`・`vp9_superframe` (mp4 の muxer が差し込む)
+  - mux は `mp4`、エンコーダーは `aac`、デコーダーは音声だけ (AAC・AC-3・E-AC-3・MP3・MP2・Opus・Vorbis・FLAC・ALAC・PCM・TrueHD・DTS)。
+    映像のデコーダー・プロトコル・avfilter・swscale は持たない
+- スレッドは使わない (`--disable-pthreads`)。そのため configure が必ずスレッドの警告を出し、`--fatal-warnings` は使えない。
+  `wasm/check-configure.sh` が、その警告のほかに WARNING が無いことと、要約の一覧を確かめる
+- libc の iconv は `--disable-iconv` で外す (字幕の文字コードの変換に使うもので、字幕は解かない)
+- アーカイブ (tar.xz) の中身は `include/`・`lib/` (.a 4 本)・`LICENSE.txt` (LGPL 3)
+
+同じタグを構成を変えて組み直すとき (DamukoPla#147 で変換の部品を足したときなど) は、入力の `revision` に版を入れる。`slim`・`android-arm64`・`wasm32` の資産名に `-r<版>` が付き (`...-9.0-slim-r2.zip`)、前の資産と並ぶ。DamukoPla の取り込みは版の大きいものを選ぶ。
+
+リリースにはアーカイブ (Windows は zip、Linux・Android・wasm は tar.xz) と、構成・ソースのコミット・スクリプトのコミット・イメージの digest
+(Android は NDK の版と zip の SHA-256、wasm は emsdk の版とコミット)・configure の引数・依存の版と SHA-256・アーカイブの SHA-256 を書いた `.json` を置く。
+Android と wasm の `.json` にはライブラリごとの大きさと SHA-256 も書く。
 リリースのタグはソースのタグと同じで、向け先と構成の違うものを同じリリースに並べる。
 同じタグを組み直しても、既にある資産は上書きしない。
 
-試しの組 (部品を外したときの大きさや LTO を量るもの) は、`extra_configure` で `slim` (Android は `android`) の configure に引数を足し、
+試しの組 (部品を外したときの大きさや LTO を量るもの) は、`extra_configure` で `slim` (Android は `android`、wasm は `wasm`) の configure に引数を足し、
 `publish` を外して回す。リリースには上げず、アーカイブ・`.json`・ビルドのログを Actions の成果物として残す。
-`extra_configure` の `--disable-<種類>=<名前>` で外す部品は、`slim/configure.txt` (`android/configure.txt`) の `--enable-<種類>=...` から
+`extra_configure` の `--disable-<種類>=<名前>` で外す部品は、`slim/configure.txt` (`android/configure.txt`・`wasm/configure.txt`) の `--enable-<種類>=...` から
 抜いてから渡す (`.github/scripts/compose-configure.sh`。残すと configure が「Disabled ... because」と警告し、`--fatal-warnings` で止まる)。
 記号を残した組 (`--disable-stripping`) を作れば、DLL の記号表から部品ごとの大きさを見積もれる。
 
@@ -98,10 +118,12 @@ Android の `.json` には .so ごとの大きさと SHA-256 も書く。
    `Build FFmpeg for Android` もタグを指定して回す。DamukoPla の Android 版の NDK や `minSdk` を変えたら、
    `build-android.yml` の `NDK_VERSION`・`NDK_URL`・`NDK_SHA256`・`ANDROID_API` を合わせる
    (`NDK_SHA256` は zip を落として取り、Google の SDK の一覧 `repository2-3.xml` の SHA-1 と照らす)
+   `Build FFmpeg for WebAssembly` もタグを指定して回す。DamukoPla の emsdk の版を変えたら、`build-wasm.yml` の
+   `EMSDK_VERSION`・`EMSDK_COMMIT` (`git ls-remote --tags https://github.com/emscripten-core/emsdk.git <版>`) を合わせる
    `slim/sources.txt` の依存も、新しいリリースがあれば版と SHA-256 を書き換える
    依存の版を上げたら、DamukoPla の `modules\player\third_party\ffmpeg-deps-licenses` の許諾文も
    同じ tarball から取り直す (DamukoPla の `scripts\pack.ps1` が版の食い違いで止まる)
-5. DamukoPla 側で `modules\player\scripts\fetch-ffmpeg.ps1` を回して取り込む (Android は `android\third_party\ffmpeg` へ)
+5. DamukoPla 側で `modules\player\scripts\fetch-ffmpeg.ps1` を回して取り込む (Android は `android\third_party\ffmpeg`、wasm は `web\third_party\ffmpeg` へ)
 
 ## ライセンス
 
