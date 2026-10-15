@@ -64,7 +64,8 @@ expect_exactly 'Enabled muxers:' 'mov mp4'
 expect_exactly 'Enabled encoders:' 'aac'
 expect_exactly 'Enabled decoders:' '
     aac ac3 alac dca eac3 flac mp2 mp3 opus pcm_f32le pcm_s16le pcm_s24le truehd vorbis'
-expect_exactly 'Enabled parsers:' 'aac ac3 av1 dca flac h264 hevc mlp mpegaudio opus vorbis vp9'
+expect_exactly 'Enabled parsers:' 'aac ac3 av1 dca flac h264 hevc mlp mpegaudio opus vorbis'
+# vp9_superframe は mp4 の muxer が引き込む
 expect_exactly 'Enabled bsfs:' 'aac_adtstoasc extract_extradata vp9_superframe'
 
 expect_line 'ARCH' 'wasm \(generic\)'

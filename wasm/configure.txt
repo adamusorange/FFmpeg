@@ -24,11 +24,12 @@
 # 分離: DamukoPla が動画として扱う形式のうち、OS が解ける映像を入れうるもの (Matroska・WebM、MP4・MOV、MPEG-TS・M2TS、AVI) と、
 # 音楽の形式 (MP3・AAC・FLAC・Ogg・WAV。M4A は mov)
 --disable-demuxers --enable-demuxer=matroska,mov,mpegts,avi,mp3,aac,flac,ogg,wav
-# 分離が使うパーサー。映像は詰め直す形式 (H.264・HEVC・AV1・VP9)、音声は下のデコーダーの形式
---disable-parsers --enable-parser=h264,hevc,av1,vp9,aac,ac3,mpegaudio,opus,vorbis,flac,dca,mlp
+# 分離が使うパーサー。映像は詰め直す形式 (H.264・HEVC・AV1)、音声は下のデコーダーの形式。
+# VP9 は詰め直さない (fMP4 の vpcC に要る画素形式を、デコーダーなしでは得られない)
+--disable-parsers --enable-parser=h264,hevc,av1,aac,ac3,mpegaudio,opus,vorbis,flac,dca,mlp
 # extract_extradata は MPEG-TS などで映像の extradata を拾う (avformat_find_stream_info が使う)。
-# aac_adtstoasc と vp9_superframe は mp4 の muxer が差し込む
---disable-bsfs --enable-bsf=extract_extradata,aac_adtstoasc,vp9_superframe
+# aac_adtstoasc は mp4 の muxer が差し込む (mp4 の muxer は vp9_superframe も引き込む)
+--disable-bsfs --enable-bsf=extract_extradata,aac_adtstoasc
 
 # 詰め直し (fMP4) と、端末が鳴らせない音声を AAC に作り直す。映像のデコーダーは持たない
 --disable-muxers --enable-muxer=mp4

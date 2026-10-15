@@ -84,8 +84,10 @@ BtbN の最新のイメージは nv-codec-headers 13.1 (NVIDIA のドライバ�
   外部ライブラリは使わない (Matroska・MOV の zlib で縮めたヘッダーは読めない)
 - 部品
   - 分離: Matroska・WebM、MP4・MOV・M4A、MPEG-TS・M2TS、AVI と、音楽の MP3・AAC・FLAC・Ogg・WAV
-  - パーサー: 映像は H.264・HEVC・AV1・VP9、音声は下のデコーダーの形式
-  - bsf: `extract_extradata` (MPEG-TS などで映像の extradata を拾う)、`aac_adtstoasc`・`vp9_superframe` (mp4 の muxer が差し込む)
+  - パーサー: 映像は H.264・HEVC・AV1、音声は下のデコーダーの形式。VP9 は詰め直さない
+    (fMP4 の `vpcC` に要る画素形式を、デコーダーなしでは得られない)
+  - bsf: `extract_extradata` (MPEG-TS などで映像の extradata を拾う)、`aac_adtstoasc` (mp4 の muxer が差し込む)。
+    `vp9_superframe` は mp4 の muxer が引き込む
   - mux は `mp4`、エンコーダーは `aac`、デコーダーは音声だけ (AAC・AC-3・E-AC-3・MP3・MP2・Opus・Vorbis・FLAC・ALAC・PCM・TrueHD・DTS)。
     映像のデコーダー・プロトコル・avfilter・swscale は持たない
 - スレッドは使わない (`--disable-pthreads`)。そのため configure が必ずスレッドの警告を出し、`--fatal-warnings` は使えない。
