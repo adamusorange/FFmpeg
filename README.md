@@ -121,7 +121,7 @@ Android と wasm の `.json` にはライブラリごとの大きさと SHA-256 
    `build-android.yml` の `NDK_VERSION`・`NDK_URL`・`NDK_SHA256`・`ANDROID_API` を合わせる
    (`NDK_SHA256` は zip を落として取り、Google の SDK の一覧 `repository2-3.xml` の SHA-1 と照らす)
    `Build FFmpeg for WebAssembly` もタグを指定して回す。DamukoPla の emsdk の版を変えたら、`build-wasm.yml` の
-   `EMSDK_VERSION`・`EMSDK_COMMIT` (`git ls-remote --tags https://github.com/emscripten-core/emsdk.git <版>`) を合わせる
+   `EMSCRIPTEN_SDK_VERSION`・`EMSCRIPTEN_SDK_COMMIT` (`git ls-remote --tags https://github.com/emscripten-core/emsdk.git <版>`) を合わせる
    `slim/sources.txt` の依存も、新しいリリースがあれば版と SHA-256 を書き換える
    依存の版を上げたら、DamukoPla の `modules\player\third_party\ffmpeg-deps-licenses` の許諾文も
    同じ tarball から取り直す (DamukoPla の `scripts\pack.ps1` が版の食い違いで止まる)

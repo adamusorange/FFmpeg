@@ -43,10 +43,11 @@ permissions:
   contents: write
 
 env:
-  # emsdk のタグと、そのコミット (タグが動いたら止める)
-  EMSDK_VERSION: 6.0.12
-  EMSDK_COMMIT: 35ff8a6d150541276abbc6bae512ca90bcfbe220
-  EMSDK_REPOSITORY: https://github.com/emscripten-core/emsdk.git
+  # emsdk のタグと、そのコミット (タグが動いたら止める)。
+  # 名前を EMSDK_ で始めない (emsdk_env.sh が EMSDK_ で始まる環境変数を消す)
+  EMSCRIPTEN_SDK_VERSION: 6.0.12
+  EMSCRIPTEN_SDK_COMMIT: 35ff8a6d150541276abbc6bae512ca90bcfbe220
+  EMSCRIPTEN_SDK_REPOSITORY: https://github.com/emscripten-core/emsdk.git
   ADDIN: "9.0"
   CONFIG: wasm
   EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
@@ -107,28 +108,28 @@ jobs:
       - name: Install emsdk
         run: |
           set -euo pipefail
-          git clone -q --depth 1 --branch "$EMSDK_VERSION" "$EMSDK_REPOSITORY" "${RUNNER_TEMP}/emsdk"
-          if [[ "$(git -C "${RUNNER_TEMP}/emsdk" rev-parse HEAD)" != "$EMSDK_COMMIT" ]]; then
-            echo "::error::emsdk のタグ ${EMSDK_VERSION} のコミットが固定したものと違います"
+          git clone -q --depth 1 --branch "$EMSCRIPTEN_SDK_VERSION" "$EMSCRIPTEN_SDK_REPOSITORY" "${RUNNER_TEMP}/emsdk"
+          if [[ "$(git -C "${RUNNER_TEMP}/emsdk" rev-parse HEAD)" != "$EMSCRIPTEN_SDK_COMMIT" ]]; then
+            echo "::error::emsdk のタグ ${EMSCRIPTEN_SDK_VERSION} のコミットが固定したものと違います"
             exit 1
           fi
-          "${RUNNER_TEMP}/emsdk/emsdk" install "$EMSDK_VERSION"
-          "${RUNNER_TEMP}/emsdk/emsdk" activate "$EMSDK_VERSION"
+          "${RUNNER_TEMP}/emsdk/emsdk" install "$EMSCRIPTEN_SDK_VERSION"
+          "${RUNNER_TEMP}/emsdk/emsdk" activate "$EMSCRIPTEN_SDK_VERSION"
           # shellcheck disable=SC1091
           source "${RUNNER_TEMP}/emsdk/emsdk_env.sh"
           version="$(emcc --version | head -1)"
           echo "$version"
-          if [[ "$version" != *" ${EMSDK_VERSION} "* ]]; then
-            echo "::error::emcc の版が ${EMSDK_VERSION} ではありません"
+          if [[ "$version" != *" ${EMSCRIPTEN_SDK_VERSION} "* ]]; then
+            echo "::error::emcc の版が ${EMSCRIPTEN_SDK_VERSION} ではありません"
             exit 1
           fi
-          echo "EMSDK_ROOT=${RUNNER_TEMP}/emsdk" >> "$GITHUB_ENV"
+          echo "EMSCRIPTEN_SDK_ROOT=${RUNNER_TEMP}/emsdk" >> "$GITHUB_ENV"
 
       - name: Build
         run: |
           set -euo pipefail
           # shellcheck disable=SC1091
-          source "${EMSDK_ROOT}/emsdk_env.sh"
+          source "${EMSCRIPTEN_SDK_ROOT}/emsdk_env.sh"
           # 足す引数で外す部品は、元の構成の --enable-<種類>=... から抜く (compose-configure.sh)
           FF_CONFIGURE="$(bash workflow/.github/scripts/compose-configure.sh workflow/wasm/configure.txt "$EXTRA_CONFIGURE")"
           export FF_CONFIGURE
@@ -158,7 +159,7 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck disable=SC1091
-          source "${EMSDK_ROOT}/emsdk_env.sh" > /dev/null
+          source "${EMSCRIPTEN_SDK_ROOT}/emsdk_env.sh" > /dev/null
           # DamukoPla の取り込みは版の表示がタグで始まることを確かめる
           if ! grep -Fq "#define FFMPEG_VERSION \"${SOURCE_TAG}\"" out/include/libavutil/ffversion.h; then
             echo "::error::版の表示がタグと違います"
@@ -191,8 +192,8 @@ jobs:
             --arg source_commit "$SOURCE_COMMIT" \
             --arg workflow_commit "$GITHUB_SHA" \
             --arg target wasm32 \
-            --arg emsdk_version "$EMSDK_VERSION" \
-            --arg emsdk_commit "$EMSDK_COMMIT" \
+            --arg emsdk_version "$EMSCRIPTEN_SDK_VERSION" \
+            --arg emsdk_commit "$EMSCRIPTEN_SDK_COMMIT" \
             --arg emcc_version "$(emcc --version | head -1)" \
             --arg addin "$ADDIN" \
             --arg configure_command "$(cat work/configure-command.txt)" \
